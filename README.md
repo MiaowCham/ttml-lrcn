@@ -59,7 +59,8 @@ python .\ttml_to_lrcn.py input.ttml --non-interactive --fake-lqe
 | `--background-mode keep\|normal\|omit` | 保留 `[x-bg]`、改为普通歌词行或省略背景人声 |
 | `--no-background` / `--background` | 分别省略/保留背景人声的兼容旧参数 |
 | `--[no-]trailing-end-marker` | 未保留行 end 时，是否在行尾追加结束时间戳 |
-| `--timing-tag-style angle\|square\|parenthesis` | 逐字/逐拍及行尾时间戳统一使用 `<>`、`[]` 或 `()` |
+| `--timing-tag-style angle\|square\|parenthesis` | 兼容旧用法；`parenthesis` 等同于选择 QRC 逐拍格式 |
+| `--compatibility-format enhanced\|eslrc\|qrc\|lys` | 自动调整主歌词为增强 LRC、ESLRC、QRC 或 Lyricify Syllable（Lys）格式 |
 | `--fake-lqe` | 使用 Lyricify Quick Export 兼容预设，输出 `.lqe` |
 | `--lqe-format qrc\|lys` | 伪装 LQE 时选择 QRC 行时间格式或带对唱属性的 Lyricify Syllable（Lys）格式 |
 | `--[no-]attachment-language` | 保留或省略翻译、发音区段的 `[lang:...]` |
@@ -83,7 +84,7 @@ python .\ttml_to_lrcn.py input.ttml --non-interactive --fake-lqe
 
 交互模式中的背景人声选项包含“保留 `[x-bg]`”“改为普通歌词行”和“不输出”。普通行会生成 `B1`、`B2` 等独立行 ID，继承所属主句的 agent；翻译和发音中的对应背景条目也会同步改为该普通行的关联格式。
 
-兼容扩展只有在省略行 `end`、`agent`、`line`、逐字 `end`、首个节拍标签，并将背景人声设为“普通行”或“不输出”时才可启用。启用后会在行尾追加结束时间戳，并可指定所有逐字/逐拍标签和行尾时间戳统一使用 `<>` 或 `[]`；保留主歌词格式声明时，二者分别声明为 `Enhanced LRC` 与 `ESLRC`。兼容扩展开启后，若仍保留主歌词字段或输出翻译/发音，默认后缀仍为 `.lrcn`；只有纯 LRC 内容才默认使用 `.lrc`。
+兼容格式会自动切换为所需字段组合：增强 LRC 与 ESLRC 省略行 `end`、`agent`、`line`、逐字 `end`、首个节拍标签，并将背景人声改为普通行（或省略），随后在行尾追加结束时间戳；QRC 与 Lys 改用毫秒与后置 `(开始,持续时间)` 标签。保留主歌词格式声明时，分别写入对应的格式名称。若仍保留主歌词字段或输出翻译/发音，默认后缀仍为 `.lrcn`；只有纯 LRC 内容才默认使用 `.lrc`。
 
 转换内容包括：
 
@@ -102,6 +103,8 @@ python .\ttml_to_lrcn.py input.ttml --non-interactive --fake-lqe
 内嵌翻译和逐拍发音共用所选标签格式：LNT 完整为 `[start,line]…`，LNT 精简为 `[line]…`；背景附属歌词使用 `[x-bg]`。
 
 每个逐拍发音区段之后还会自动生成一个 `[transliteration: format@LRC]` 逐行发音区段。脚本提取非背景的叶子音节、清理音节边缘已有空白，再用单个空格拼接，例如 `[8.175]ashi moto ni chirabaru kotoba`。
+
+“兼容格式”可直接选择增强 LRC、ESLRC、QRC 或 Lys。增强 LRC / ESLRC 会自动省略主行扩展字段、将背景人声改为普通行（或省略）并追加对应样式的行尾结束时间；QRC / Lys 会自动使用整数毫秒、行和逐字的持续时间，并把逐字 `(开始,持续时间)` 放在音节之后。QRC / Lys 不会启用 LQE 头部伪装，仍按普通 LRCN 输出。
 
 启用“伪装 Lyricify Quick Export”时，输出头固定为 `[Lyricify Quick Export]` 与 `[version:1.0]`，主歌词声明按所选项标记为 `format@QRC` 或 `format@Lyricify Syllable`，输出后缀固定为 `.lqe`。该预设会固定保留顶部数据、主歌词声明、行 `end`、逐字 `end`，并省略歌曲结构、agent、line ID；主歌词所有时间戳均使用整数毫秒，行和逐字的第二个时间值均改为持续时间，逐字标签以 `(开始,持续时间)` 的形式置于音节之后。不会追加行尾时间戳，也不会省略首个时间戳。翻译与发音保持标准 LRC 的补零秒制时间标签；可独立取消翻译标签的语言信息。背景人声不能保留为 `[x-bg]`，可改为普通行或省略。附属歌词的语言信息会合并到同一标签中，如 `[pronunciation: format@LRC, language@romaji]`。
 

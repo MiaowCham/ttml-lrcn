@@ -93,6 +93,8 @@ class ConversionOptions:
     transliteration_format: str = "both"
     fake_lqe: bool = False
     lqe_format: str = "qrc"
+    beat_format: str = "qrc"
+    compatibility_format: str = "none"
 
     def validate(self) -> None:
         translation_formats = {"lnt-full", "lnt-short", "lrc", "none"}
@@ -105,6 +107,10 @@ class ConversionOptions:
             raise ValueError(f"无效的逐字标签样式：{self.timing_tag_style}")
         if self.lqe_format not in {"qrc", "lys"}:
             raise ValueError(f"无效的 LQE 格式：{self.lqe_format}")
+        if self.beat_format not in {"qrc", "lys"}:
+            raise ValueError(f"无效的逐拍格式：{self.beat_format}")
+        if self.compatibility_format not in {"none", "enhanced", "eslrc", "qrc", "lys"}:
+            raise ValueError(f"无效的兼容格式：{self.compatibility_format}")
         if (self.translation_format != "none" or self.transliteration_format != "none") and not self.include_lyrics_marker:
             raise OptionConflict("输出翻译或发音时必须保留主歌词格式声明")
         if not self.include_line_id and (
@@ -118,10 +124,85 @@ class ConversionOptions:
             raise OptionConflict("不输出附属歌词时，发音也必须设为不输出")
         if self.translation_format == "none" and self.include_attachment_language:
             raise OptionConflict("不输出附属歌词时不能保留附属歌词语言")
-        if self.append_end_marker and not self.fake_lqe and not compatibility_extension_eligible(self):
+        if (
+            self.append_end_marker
+            and not self.fake_lqe
+            and self.compatibility_format not in {"qrc", "lys"}
+            and not compatibility_extension_eligible(self)
+        ):
             raise OptionConflict(
                 "启用兼容扩展前，需省略全部主行扩展字段，并将背景人声设为普通行或不输出"
             )
+
+
+def qrc_syllable_format(options: ConversionOptions) -> str:
+    """Return the QRC/Lys dialect selected for parenthesized beat timing."""
+    if options.fake_lqe:
+        return options.lqe_format
+    return options.compatibility_format if options.compatibility_format in {"qrc", "lys"} else options.beat_format
+
+
+def uses_qrc_syllable_timing(options: ConversionOptions) -> bool:
+    """Whether primary lyric beats use QRC-style postfixed millisecond timing."""
+    return options.fake_lqe or options.compatibility_format in {"qrc", "lys"} or options.timing_tag_style == "parenthesis"
+
+
+def uses_lys_syllable_format(options: ConversionOptions) -> bool:
+    return uses_qrc_syllable_timing(options) and qrc_syllable_format(options) == "lys"
+
+
+def force_qrc_syllable_format(options: ConversionOptions) -> ConversionOptions:
+    """Normalize the primary lyric fields required by QRC/Lys beat syntax."""
+    if options.fake_lqe or not uses_qrc_syllable_timing(options):
+        return options
+    return replace(
+        options,
+        include_lyrics_marker=True,
+        include_line_end=True,
+        include_agent=False,
+        include_line_id=False,
+        include_syllable_end=True,
+        include_first_syllable_tag=True,
+        append_end_marker=False,
+        timing_tag_style="parenthesis",
+        include_background=options.include_background,
+        background_as_line=options.include_background,
+    )
+
+
+def apply_compatibility_format(options: ConversionOptions) -> ConversionOptions:
+    """Normalize options to the selected enhanced-LRC, ESLRC, QRC or Lys dialect."""
+    if options.fake_lqe:
+        return force_fake_lqe(options)
+    selected = options.compatibility_format
+    if selected == "none":
+        return options
+    attachment_options = {
+        "translation_format": (
+            "lrc" if options.translation_format in {"lnt-full", "lnt-short"} else options.translation_format
+        ),
+        "transliteration_format": (
+            "lrc" if options.transliteration_format in {"lrcn", "both"} else options.transliteration_format
+        ),
+    }
+    if selected in {"qrc", "lys"}:
+        return force_qrc_syllable_format(
+            replace(options, compatibility_format=selected, beat_format=selected, **attachment_options)
+        )
+    return replace(
+        options,
+        include_lyrics_marker=True,
+        include_line_end=False,
+        include_agent=False,
+        include_line_id=False,
+        include_syllable_end=False,
+        include_first_syllable_tag=False,
+        include_background=options.include_background,
+        background_as_line=options.include_background,
+        append_end_marker=True,
+        timing_tag_style="angle" if selected == "enhanced" else "square",
+        **attachment_options,
+    )
 
 
 @dataclass(frozen=True)
@@ -511,8 +592,10 @@ def build_line_label(
     options: ConversionOptions,
     lys_property: int | None = None,
 ) -> str:
-    if options.fake_lqe and options.lqe_format == "lys" and lys_property is not None:
+    if uses_lys_syllable_format(options) and lys_property is not None:
         return f"[{lys_property}]"
+    if uses_qrc_syllable_timing(options):
+        return "[" + ",".join(value for value in (start, end) if value) + "]"
     fields = [start]
     if options.include_line_id:
         fields.extend(
@@ -729,8 +812,7 @@ def render_line_transliteration(
 
 def convert(root: ET.Element, options: ConversionOptions | None = None) -> str:
     options = options or ConversionOptions()
-    if options.fake_lqe:
-        options = force_fake_lqe(options)
+    options = apply_compatibility_format(options)
     options.validate()
     context = time_context(root)
     language = root.get(qname(XML, "lang"), "")
@@ -770,6 +852,9 @@ def convert(root: ET.Element, options: ConversionOptions | None = None) -> str:
     if options.include_lyrics_marker:
         if options.fake_lqe:
             marker = "Lyricify Syllable" if options.lqe_format == "lys" else "QRC"
+            lines.append(f"[lyrics: format@{marker}]")
+        elif uses_qrc_syllable_timing(options):
+            marker = "Lyricify Syllable" if uses_lys_syllable_format(options) else "QRC"
             lines.append(f"[lyrics: format@{marker}]")
         elif options.append_end_marker:
             marker = "Enhanced LRC" if options.timing_tag_style == "angle" else "ESLRC"
@@ -831,16 +916,17 @@ def convert(root: ET.Element, options: ConversionOptions | None = None) -> str:
             agent = paragraph.get(qname(TTM, "agent"), "")
             if agent:
                 previous_agent = agent
-            line_left = resolve_lys_direction(agent) if options.fake_lqe and options.lqe_format == "lys" else True
+            line_left = resolve_lys_direction(agent) if uses_lys_syllable_format(options) else True
             begin, end = paragraph.get("begin"), paragraph.get("end")
             if not begin:
                 raise ValueError(f"歌词行 {line_id!r} 缺少 begin")
             attachment_start = format_lrc_time(begin, context) if options.fake_lqe else format_time(begin, context)
-            start = qrc_milliseconds(begin, context) if options.fake_lqe else attachment_start
+            qrc_timing = uses_qrc_syllable_timing(options)
+            start = qrc_milliseconds(begin, context) if qrc_timing else attachment_start
             line_starts.setdefault(line_id, attachment_start)
             end_value = (
                 qrc_duration(begin, end, context)
-                if options.fake_lqe and end
+                if qrc_timing and end
                 else (format_time(end, context) if end else "")
             )
             main, backgrounds = split_main_and_background(
@@ -848,8 +934,8 @@ def convert(root: ET.Element, options: ConversionOptions | None = None) -> str:
                 context,
                 options.include_syllable_end,
                 options.timing_tag_style,
-                options.fake_lqe,
-                options.fake_lqe,
+                qrc_timing,
+                qrc_timing,
             )
             if not options.include_first_syllable_tag:
                 main = omit_first_syllable_tag(
@@ -887,7 +973,7 @@ def convert(root: ET.Element, options: ConversionOptions | None = None) -> str:
                     )
                     attachment_background_end = bounds[1] if bounds else end_value
                     background_start, background_end = bounds or (start, end_value)
-                    if options.fake_lqe and bounds:
+                    if qrc_timing and bounds:
                         background_start = qrc_milliseconds(bounds[0], context)
                         background_end = qrc_duration(bounds[0], bounds[1], context)
                     background_refs.setdefault(line_id, []).append(
@@ -1051,6 +1137,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--timing-tag-style",
         choices=("angle", "square", "parenthesis"),
         help="逐字/逐拍与行尾时间戳统一使用 <>、[] 或 ()",
+    )
+    parser.add_argument(
+        "--compatibility-format",
+        choices=("enhanced", "eslrc", "qrc", "lys"),
+        help="自动调整主歌词为增强 LRC、ESLRC、QRC 或 Lyricify Syllable（Lys）格式",
     )
     boolean_options = (
         ("metadata", "保留顶部元数据"),
@@ -1218,16 +1309,29 @@ def build_options(args: argparse.Namespace, interactive: bool) -> ConversionOpti
         transliteration_format=transliteration_format,
         lqe_format=args.lqe_format,
     )
-    if compatibility_extension_eligible(preliminary_options):
+    if interactive and args.compatibility_format is None:
+        compatibility_format = prompt_choice(
+            "使用哪种兼容格式？",
+            [
+                ("none", "不使用"),
+                ("enhanced", "增强 LRC"),
+                ("eslrc", "ESLRC"),
+                ("qrc", "QRC"),
+                ("lys", "LYS"),
+            ],
+            "none",
+        )
+    else:
+        compatibility_format = args.compatibility_format or "none"
+    append_end = compatibility_format in {"enhanced", "eslrc"}
+    if compatibility_format == "none" and compatibility_extension_eligible(preliminary_options):
         trailing_value = getattr(args, "trailing_end_marker", None)
         append_end = (
             prompt_yes_no("启用兼容扩展并在行尾追加结束时间戳吗？", False)
             if interactive and trailing_value is None
             else option_value(trailing_value, False)
         )
-    else:
-        append_end = bool(getattr(args, "trailing_end_marker", False))
-    if append_end and interactive and getattr(args, "timing_tag_style", None) is None:
+    if append_end and compatibility_format == "none" and interactive and getattr(args, "timing_tag_style", None) is None:
         timing_tag_style = prompt_choice(
             "逐字/逐拍与行尾时间戳使用哪种标签？",
             [("angle", "<>"), ("square", "[]"), ("parenthesis", "()")],
@@ -1253,9 +1357,10 @@ def build_options(args: argparse.Namespace, interactive: bool) -> ConversionOpti
         translation_format=translation_format,
         transliteration_format=transliteration_format,
         lqe_format=args.lqe_format,
+        beat_format=(args.compatibility_format if args.compatibility_format in {"qrc", "lys"} else "qrc"),
+        compatibility_format=(compatibility_format or ("qrc" if timing_tag_style == "parenthesis" else "none")),
     )
-    if args.fake_lqe:
-        options = force_fake_lqe(options)
+    options = apply_compatibility_format(options if not args.fake_lqe else replace(options, fake_lqe=True))
     options.validate()
     return options
 
@@ -1300,6 +1405,10 @@ def build_form_options(
     )
     trailing = tk.BooleanVar(value=bool(getattr(args, "trailing_end_marker", False)))
     tag_style = tk.StringVar(value=getattr(args, "timing_tag_style", None) or "angle")
+    compatibility_format = tk.StringVar(
+        value=getattr(args, "compatibility_format", None)
+        or ("qrc" if tag_style.get() == "parenthesis" else "none")
+    )
     fake_lqe = tk.BooleanVar(value=bool(getattr(args, "fake_lqe", False)))
     lqe_format = tk.StringVar(value=getattr(args, "lqe_format", "qrc"))
     output_path = tk.StringVar(value=str(default_output) if default_output else "")
@@ -1401,21 +1510,18 @@ def build_form_options(
     )
     translation_language_check.grid(row=3, column=0, columnspan=5, sticky="w", pady=(2, 0))
 
-    trailing_box = ttk.LabelFrame(outer, text="兼容扩展", padding=8)
+    trailing_box = ttk.LabelFrame(outer, text="兼容格式", padding=8)
     trailing_box.grid(row=4, column=0, sticky="ew", pady=(0, 8))
-    trailing_check = ttk.Checkbutton(
-        trailing_box, text="启用后在行尾追加结束时间戳", variable=trailing
-    )
-    trailing_check.grid(row=0, column=0, sticky="w")
-    angle_button = ttk.Radiobutton(trailing_box, text="所有逐拍标签使用 <>", variable=tag_style, value="angle")
-    square_button = ttk.Radiobutton(trailing_box, text="所有逐拍标签使用 []", variable=tag_style, value="square")
-    parenthesis_button = ttk.Radiobutton(trailing_box, text="所有逐拍标签使用 ()", variable=tag_style, value="parenthesis")
-    angle_button.grid(row=1, column=0, sticky="w", pady=(4, 0))
-    square_button.grid(row=1, column=1, sticky="w", padx=(16, 0), pady=(4, 0))
-    parenthesis_button.grid(row=1, column=2, sticky="w", padx=(16, 0), pady=(4, 0))
+    compatibility_buttons: list[ttk.Radiobutton] = []
+    for column, (value, label) in enumerate(
+        (("none", "不使用"), ("enhanced", "增强 LRC"), ("eslrc", "ESLRC"), ("qrc", "QRC"), ("lys", "LYS"))
+    ):
+        button = ttk.Radiobutton(trailing_box, text=label, variable=compatibility_format, value=value)
+        button.grid(row=0, column=column, sticky="w", padx=(0, 14))
+        compatibility_buttons.append(button)
     compatibility_hint = tk.StringVar()
     ttk.Label(trailing_box, textvariable=compatibility_hint).grid(
-        row=2, column=0, columnspan=2, sticky="w", pady=(4, 0)
+        row=1, column=0, columnspan=5, sticky="w", pady=(4, 0)
     )
 
     output_box = ttk.LabelFrame(outer, text="输出文件", padding=8)
@@ -1440,6 +1546,7 @@ def build_form_options(
 
     def update_state(*_unused: object) -> None:
         lqe_mode = fake_lqe.get()
+        selected_compatibility = compatibility_format.get()
         if lqe_mode:
             for variable, value in (
                 (metadata, True), (lyrics_marker, True), (song_part, False),
@@ -1451,6 +1558,30 @@ def build_form_options(
                     variable.set(value)
             if background.get() == "keep":
                 background.set("normal")
+        elif selected_compatibility in {"enhanced", "eslrc"}:
+            for variable, value in (
+                (lyrics_marker, True), (line_end, False), (agent, False),
+                (line_id, False), (syllable_end, False), (first_syllable, False),
+                (trailing, True),
+            ):
+                if variable.get() != value:
+                    variable.set(value)
+            if background.get() == "keep":
+                background.set("normal")
+            if tag_style.get() != ("angle" if selected_compatibility == "enhanced" else "square"):
+                tag_style.set("angle" if selected_compatibility == "enhanced" else "square")
+        elif selected_compatibility in {"qrc", "lys"}:
+            for variable, value in (
+                (lyrics_marker, True), (line_end, True), (agent, False),
+                (line_id, False), (syllable_end, True), (first_syllable, True),
+                (trailing, False),
+            ):
+                if variable.get() != value:
+                    variable.set(value)
+            if background.get() == "keep":
+                background.set("normal")
+            if tag_style.get() != "parenthesis":
+                tag_style.set("parenthesis")
         has_line_id = line_id.get()
         for button in translation_buttons[:2]:
             button.configure(state="normal" if has_line_id else "disabled")
@@ -1480,25 +1611,6 @@ def build_form_options(
             lyrics_controls[1].configure(state="disabled")
         else:
             lyrics_controls[1].configure(state="normal")
-        compatibility_ready = lqe_mode or (
-            not line_end.get()
-            and not agent.get()
-            and not line_id.get()
-            and not syllable_end.get()
-            and not first_syllable.get()
-            and background.get() in {"normal", "omit"}
-        )
-        trailing_check.configure(state="normal" if compatibility_ready else "disabled")
-        if not compatibility_ready:
-            trailing.set(False)
-            compatibility_hint.set("需关闭全部主行扩展字段，且 BG 为普通行或不输出。")
-        else:
-            compatibility_hint.set("可启用兼容扩展；仅纯 LRC 输出默认使用 .lrc 后缀。")
-        style_enabled = compatibility_ready and trailing.get()
-        state = "normal" if style_enabled else "disabled"
-        angle_button.configure(state=state)
-        square_button.configure(state=state)
-        parenthesis_button.configure(state=state)
         if lqe_mode:
             if trailing.get():
                 trailing.set(False)
@@ -1510,10 +1622,8 @@ def build_form_options(
                 button.configure(state="disabled" if index == 0 else "normal")
             for button in translation_buttons + transliteration_buttons:
                 button.configure(state="disabled")
-            trailing_check.configure(state="disabled")
-            angle_button.configure(state="disabled")
-            square_button.configure(state="disabled")
-            parenthesis_button.configure(state="disabled")
+            for button in compatibility_buttons:
+                button.configure(state="disabled")
             compatibility_hint.set("伪装 LQE：QRC 使用后置 (开始,持续时间) 标签。")
         else:
             for control in lyrics_controls:
@@ -1521,6 +1631,11 @@ def build_form_options(
                     control.configure(state="normal")
             for button in background_buttons:
                 button.configure(state="normal")
+            for button in compatibility_buttons:
+                button.configure(state="normal")
+            compatibility_hint.set(
+                "增强 LRC/ESLRC 会省略主行扩展并追加行尾时间；QRC/LYS 使用毫秒后置 (开始,持续时间) 逐拍标签。"
+            )
         lqe_button_state = "normal" if lqe_mode else "disabled"
         qrc_button.configure(state=lqe_button_state)
         lys_button.configure(state=lqe_button_state)
@@ -1535,6 +1650,7 @@ def build_form_options(
     attachment_language.trace_add("write", update_state)
     trailing.trace_add("write", update_state)
     fake_lqe.trace_add("write", update_state)
+    compatibility_format.trace_add("write", update_state)
     update_state()
 
     buttons = ttk.Frame(outer)
@@ -1570,9 +1686,10 @@ def build_form_options(
                 transliteration_format=transliteration.get(),
                 fake_lqe=fake_lqe.get(),
                 lqe_format=lqe_format.get(),
+                beat_format=compatibility_format.get() if compatibility_format.get() in {"qrc", "lys"} else "qrc",
+                compatibility_format=compatibility_format.get(),
             )
-            if options.fake_lqe:
-                options = force_fake_lqe(options)
+            options = apply_compatibility_format(options)
             options.validate()
         except ValueError as exc:
             messagebox.showerror("选项无效", str(exc), parent=root)
