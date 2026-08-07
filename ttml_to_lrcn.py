@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -100,6 +101,7 @@ class ConversionOptions:
     lqe_format: str = "qrc"
     beat_format: str = "qrc"
     compatibility_format: str = "none"
+    miaowcham_mode: bool = False
 
     def validate(self) -> None:
         translation_formats = {"lnt-full", "lnt-short", "lrc"}
@@ -239,6 +241,8 @@ def output_suffix(options: ConversionOptions) -> str:
     """Choose the default suffix after all output options are known."""
     if options.fake_lqe:
         return ".lqe"
+    if options.miaowcham_mode:
+        return ".miaowchamsnewapplemusicttmllyricslikelrcenhancenext"
     if not has_embedded_attachments(options):
         suffixes = {"enhanced": ".lrc", "eslrc": ".lrc", "qrc": ".qrc", "lys": ".lys"}
         if options.compatibility_format in suffixes:
@@ -918,7 +922,13 @@ def convert(root: ET.Element, options: ConversionOptions | None = None) -> str:
         if options.fake_lqe:
             lines.extend(["[Lyricify Quick Export]", "[version:1.0]"])
         else:
-            lines.extend(["[Lyrics Next]", "[version:2.0]", f"[timing:{timing}]"])
+            title = (
+                "MiaowCham's New Apple Music TTML Lyrics Like LRC Enhance Next"
+                if options.miaowcham_mode
+                else "Lyrics Next"
+            )
+            version = "114.514" if options.miaowcham_mode else "2.0"
+            lines.extend([f"[{title}]", f"[version:{version}]", f"[timing:{timing}]"])
         if language and not options.fake_lqe:
             lines.append(f"[lang:{language}]")
         if options.include_agent and not options.fake_lqe:
@@ -1239,6 +1249,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=("enhanced", "eslrc", "qrc", "lys", "lqe"),
         help="自动调整主歌词为增强 LRC、ESLRC、QRC、LYS 或 LQE 格式",
     )
+    parser.add_argument(
+        "--?????", "-??", dest="miaowcham_mode", action="store_true",
+        help=argparse.SUPPRESS,
+    )
     boolean_options = (
         ("metadata", "保留顶部元数据"),
         ("lyrics-marker", "保留主歌词格式声明"),
@@ -1470,6 +1484,7 @@ def build_options(args: argparse.Namespace, interactive: bool) -> ConversionOpti
         lqe_format=args.lqe_format,
         beat_format=(args.compatibility_format if args.compatibility_format in {"qrc", "lys"} else "qrc"),
         compatibility_format=(compatibility_format or ("qrc" if timing_tag_style == "parenthesis" else "none")),
+        miaowcham_mode=args.miaowcham_mode,
     )
     options = apply_compatibility_format(options if not args.fake_lqe else replace(options, fake_lqe=True))
     options.validate()
@@ -1520,6 +1535,7 @@ def build_form_options(
         value=("lqe" if getattr(args, "fake_lqe", False) else getattr(args, "compatibility_format", None))
         or ("qrc" if tag_style.get() == "parenthesis" else "none")
     )
+    miaowcham_mode = tk.BooleanVar(value=bool(getattr(args, "miaowcham_mode", False)))
     embed_attachments = tk.BooleanVar(value=True)
     write_translation_track = tk.BooleanVar(value=False)
     write_transliteration_track = tk.BooleanVar(value=False)
@@ -1625,16 +1641,31 @@ def build_form_options(
     trailing_box = ttk.LabelFrame(outer, text="兼容格式", padding=8)
     trailing_box.grid(row=4, column=0, sticky="ew", pady=(0, 8))
     compatibility_buttons: list[ttk.Radiobutton] = []
+    none_button: ttk.Radiobutton | None = None
     for column, (value, label) in enumerate(
         (("none", "不使用"), ("enhanced", "增强 LRC"), ("eslrc", "ESLRC"), ("qrc", "QRC"), ("lys", "LYS"), ("lqe", "LQE"))
     ):
         button = ttk.Radiobutton(trailing_box, text=label, variable=compatibility_format, value=value)
         button.grid(row=0, column=column, sticky="w", padx=(0, 14))
         compatibility_buttons.append(button)
+        if value == "none":
+            none_button = button
     compatibility_hint = tk.StringVar()
     ttk.Label(trailing_box, textvariable=compatibility_hint).grid(
         row=1, column=0, columnspan=5, sticky="w", pady=(4, 0)
     )
+    none_clicks: list[float] = []
+
+    def toggle_miaowcham_mode(_event: object = None) -> None:
+        now = time.monotonic()
+        none_clicks[:] = [clicked for clicked in none_clicks if now - clicked < 1.5]
+        none_clicks.append(now)
+        if len(none_clicks) >= 10:
+            miaowcham_mode.set(not miaowcham_mode.get())
+            none_clicks.clear()
+
+    assert none_button is not None
+    none_button.bind("<Button-1>", toggle_miaowcham_mode, add="+")
 
     output_box = ttk.LabelFrame(outer, text="输出文件", padding=8)
     output_box.grid(row=5, column=0, sticky="ew", pady=(0, 8))
@@ -1709,6 +1740,8 @@ def build_form_options(
     def update_state(*_unused: object) -> None:
         selected_compatibility = compatibility_format.get()
         lqe_mode = selected_compatibility == "lqe"
+        if none_button is not None:
+            none_button.configure(text="�����۞����" if miaowcham_mode.get() else "不使用")
         if lqe_mode:
             for variable, value in (
                 (metadata, True), (lyrics_marker, True), (song_part, False),
@@ -1793,13 +1826,18 @@ def build_form_options(
                 )
             for button in compatibility_buttons:
                 button.configure(state="normal")
-            compatibility_hint.set({
+            compatibility_hint.set(
+                "��MiaowCham��TTML��LRC��Enhance��Next��"
+                if miaowcham_mode.get()
+                else {
                 "none": "LRCN：保留当前主歌词字段；无内嵌翻译/音译时不写格式声明。",
                 "enhanced": "增强 LRC：省略主行扩展，使用 <> 行尾结束时间，输出 .lrc。",
                 "eslrc": "ESLRC：省略主行扩展，使用 [] 行尾结束时间，输出 .lrc。",
                 "qrc": "QRC：毫秒与后置 (开始,持续时间) 逐拍标签，输出 .qrc。",
                 "lys": "LYS：带行属性的毫秒逐拍标签，输出 .lys。",
-            }[selected_compatibility])
+                "lqe": "LQE：固定使用 LYS 的后置 (开始,持续时间) 标签。",
+                }[selected_compatibility]
+            )
 
     line_id.trace_add("write", update_state)
     line_end.trace_add("write", update_state)
@@ -1813,6 +1851,7 @@ def build_form_options(
     embed_attachments.trace_add("write", update_state)
     trailing.trace_add("write", update_state)
     compatibility_format.trace_add("write", update_state)
+    miaowcham_mode.trace_add("write", update_state)
     update_state()
 
     buttons = ttk.Frame(outer)
@@ -1855,6 +1894,7 @@ def build_form_options(
                 lqe_format="lys",
                 beat_format=compatibility_format.get() if compatibility_format.get() in {"qrc", "lys"} else "qrc",
                 compatibility_format=compatibility_format.get(),
+                miaowcham_mode=miaowcham_mode.get(),
             )
             options = apply_compatibility_format(options)
             options.validate()
