@@ -11,6 +11,8 @@ Codex 写的，可能会在未来重构。
 
 ## 使用
 
+Windows 下可直接双击 `启动GUI.pyw` 启动固定大小的图形界面，不会显示终端窗口；也可以使用 `pythonw 启动GUI.pyw`。将 `.ttml` 文件拖到仓库中的 `启动GUI.pyw` 上，会直接打开表单并预填输入路径，原文件不会被移动或复制。
+
 ```powershell
 # 不提供输入文件：直接打开表单，在其中输入路径或点击“浏览”选择 TTML
 python .\ttml_to_lrcn.py

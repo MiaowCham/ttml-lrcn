@@ -1484,7 +1484,7 @@ def build_form_options(
     except tk.TclError as exc:
         raise FormUnavailable(str(exc)) from exc
     root.title("TTML 转 LRCN")
-    root.resizable(True, True)
+    root.resizable(False, False)
 
     def initial(name: str, default: bool = True) -> bool:
         value = getattr(args, name)
