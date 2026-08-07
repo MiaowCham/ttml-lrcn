@@ -933,7 +933,6 @@ def convert(root: ET.Element, options: ConversionOptions | None = None) -> str:
         lines.append("")
     emit_lyrics_marker = (
         options.fake_lqe
-        or options.compatibility_format != "none"
         or has_embedded_attachments(options)
     )
     if emit_lyrics_marker:
