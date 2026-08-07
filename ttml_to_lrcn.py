@@ -1887,8 +1887,8 @@ def build_form_options(
                     track_path = selected_output.with_name(selected_output.stem + suffix)
                     track_path.write_text(content, encoding="utf-8", newline="\n")
                     written_tracks.append(track_path)
-                track_text = "" if not written_tracks else "；" + "、".join(str(path) for path in written_tracks)
-                status.set(f"已生成：{selected_output}{track_text}；窗口保持打开，可继续转换。")
+                track_text = "" if not written_tracks else f"，另生成 {len(written_tracks)} 个附属文件"
+                status.set(f"转换完成{track_text}；窗口保持打开，可继续转换。")
         except (ET.ParseError, OSError, ValueError) as exc:
             messagebox.showerror("转换失败", str(exc), parent=root)
 
