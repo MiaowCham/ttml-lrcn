@@ -283,7 +283,11 @@ def force_fake_lqe(options: ConversionOptions) -> ConversionOptions:
         timing_tag_style="parenthesis",
         translation_format="lrc",
         translation_output="lrc",
-        transliteration_format="lrc",
+        transliteration_format=(
+            options.transliteration_format
+            if options.transliteration_format in {"lrc", "none"}
+            else "lrc"
+        ),
         fake_lqe=True,
         lqe_format="lys",
         compatibility_format="lys",
@@ -1561,12 +1565,9 @@ def build_form_options(
     ):
         control = ttk.Checkbutton(lyrics_box, text=label, variable=variable)
         control.grid(
-            row=index // 3, column=index % 3, sticky="w", padx=(0, 12), pady=2
+            row=index // 4, column=index % 4, sticky="w", padx=(0, 12), pady=2
         )
         lyrics_controls.append(control)
-    ttk.Checkbutton(
-        lyrics_box, text="伪装 Lyricify Quick Export（.lqe）", variable=fake_lqe
-    ).grid(row=3, column=0, sticky="w", pady=(5, 0))
 
     background_box = ttk.LabelFrame(outer, text="背景人声", padding=8)
     background_box.grid(row=2, column=0, sticky="ew", pady=(0, 8))
@@ -1628,6 +1629,9 @@ def build_form_options(
         button = ttk.Radiobutton(trailing_box, text=label, variable=compatibility_format, value=value)
         button.grid(row=0, column=column, sticky="w", padx=(0, 14))
         compatibility_buttons.append(button)
+    ttk.Checkbutton(
+        trailing_box, text="伪装 Lyricify Quick Export（.lqe）", variable=fake_lqe
+    ).grid(row=0, column=5, sticky="w")
     compatibility_hint = tk.StringVar()
     ttk.Label(trailing_box, textvariable=compatibility_hint).grid(
         row=1, column=0, columnspan=5, sticky="w", pady=(4, 0)
@@ -1711,7 +1715,7 @@ def build_form_options(
                 (metadata, True), (lyrics_marker, True), (song_part, False),
                 (line_end, True), (agent, False), (line_id, False),
                 (syllable_end, True), (first_syllable, True),
-                (translation, "lrc"), (transliteration, "lrc"),
+                (translation, "lrc"),
             ):
                 if variable.get() != value:
                     variable.set(value)
@@ -1771,8 +1775,12 @@ def build_form_options(
                 control.configure(state="disabled")
             for index, button in enumerate(background_buttons):
                 button.configure(state="disabled" if index == 0 else "normal")
-            for button in translation_buttons + transliteration_buttons:
+            for button in translation_buttons:
                 button.configure(state="disabled")
+            for button in transliteration_buttons:
+                button.configure(
+                    state="normal" if button.cget("value") in {"lrc", "none"} else "disabled"
+                )
             for button in compatibility_buttons:
                 button.configure(state="disabled")
             compatibility_hint.set("伪装 LQE：固定使用 LYS 的后置 (开始,持续时间) 标签。")
