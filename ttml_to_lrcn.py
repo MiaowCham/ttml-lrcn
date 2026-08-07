@@ -116,7 +116,7 @@ class ConversionOptions:
             raise ValueError(f"无效的 LQE 格式：{self.lqe_format}")
         if self.beat_format not in {"qrc", "lys"}:
             raise ValueError(f"无效的逐拍格式：{self.beat_format}")
-        if self.compatibility_format not in {"none", "enhanced", "eslrc", "qrc", "lys"}:
+        if self.compatibility_format not in {"none", "enhanced", "eslrc", "qrc", "lys", "lqe"}:
             raise ValueError(f"无效的兼容格式：{self.compatibility_format}")
         if has_embedded_attachments(self) and not self.include_lyrics_marker:
             raise OptionConflict("内嵌翻译或发音时必须保留主歌词格式声明")
@@ -178,6 +178,8 @@ def apply_compatibility_format(options: ConversionOptions) -> ConversionOptions:
     if options.fake_lqe:
         return force_fake_lqe(options)
     selected = options.compatibility_format
+    if selected == "lqe":
+        return force_fake_lqe(replace(options, fake_lqe=True))
     if selected == "none":
         return options
     attachment_options = {
@@ -290,7 +292,7 @@ def force_fake_lqe(options: ConversionOptions) -> ConversionOptions:
         ),
         fake_lqe=True,
         lqe_format="lys",
-        compatibility_format="lys",
+        compatibility_format="lqe",
     )
 
 
@@ -1234,8 +1236,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--compatibility-format",
-        choices=("enhanced", "eslrc", "qrc", "lys"),
-        help="自动调整主歌词为增强 LRC、ESLRC、QRC 或 Lyricify Syllable（Lys）格式",
+        choices=("enhanced", "eslrc", "qrc", "lys", "lqe"),
+        help="自动调整主歌词为增强 LRC、ESLRC、QRC、LYS 或 LQE 格式",
     )
     boolean_options = (
         ("metadata", "保留顶部元数据"),
@@ -1421,6 +1423,7 @@ def build_options(args: argparse.Namespace, interactive: bool) -> ConversionOpti
                 ("eslrc", "ESLRC"),
                 ("qrc", "QRC"),
                 ("lys", "LYS"),
+                ("lqe", "LQE"),
             ],
             "none",
         )
@@ -1514,10 +1517,9 @@ def build_form_options(
     trailing = tk.BooleanVar(value=bool(getattr(args, "trailing_end_marker", False)))
     tag_style = tk.StringVar(value=getattr(args, "timing_tag_style", None) or "angle")
     compatibility_format = tk.StringVar(
-        value=getattr(args, "compatibility_format", None)
+        value=("lqe" if getattr(args, "fake_lqe", False) else getattr(args, "compatibility_format", None))
         or ("qrc" if tag_style.get() == "parenthesis" else "none")
     )
-    fake_lqe = tk.BooleanVar(value=bool(getattr(args, "fake_lqe", False)))
     embed_attachments = tk.BooleanVar(value=True)
     write_translation_track = tk.BooleanVar(value=False)
     write_transliteration_track = tk.BooleanVar(value=False)
@@ -1624,14 +1626,11 @@ def build_form_options(
     trailing_box.grid(row=4, column=0, sticky="ew", pady=(0, 8))
     compatibility_buttons: list[ttk.Radiobutton] = []
     for column, (value, label) in enumerate(
-        (("none", "不使用"), ("enhanced", "增强 LRC"), ("eslrc", "ESLRC"), ("qrc", "QRC"), ("lys", "LYS"))
+        (("none", "不使用"), ("enhanced", "增强 LRC"), ("eslrc", "ESLRC"), ("qrc", "QRC"), ("lys", "LYS"), ("lqe", "LQE"))
     ):
         button = ttk.Radiobutton(trailing_box, text=label, variable=compatibility_format, value=value)
         button.grid(row=0, column=column, sticky="w", padx=(0, 14))
         compatibility_buttons.append(button)
-    ttk.Checkbutton(
-        trailing_box, text="伪装 Lyricify Quick Export（.lqe）", variable=fake_lqe
-    ).grid(row=0, column=5, sticky="w")
     compatibility_hint = tk.StringVar()
     ttk.Label(trailing_box, textvariable=compatibility_hint).grid(
         row=1, column=0, columnspan=5, sticky="w", pady=(4, 0)
@@ -1648,7 +1647,7 @@ def build_form_options(
             return Path(output_path.get())
         if input_value.get().strip():
             source = Path(input_value.get())
-            suffix = ".lqe" if fake_lqe.get() else {
+            suffix = ".lqe" if compatibility_format.get() == "lqe" else {
                 "enhanced": ".lrc", "eslrc": ".lrc", "qrc": ".qrc", "lys": ".lys",
             }.get(compatibility_format.get(), ".lrcn")
             return source.with_suffix(suffix)
@@ -1708,8 +1707,8 @@ def build_form_options(
     browse_button.grid(row=0, column=1, padx=(8, 0))
 
     def update_state(*_unused: object) -> None:
-        lqe_mode = fake_lqe.get()
         selected_compatibility = compatibility_format.get()
+        lqe_mode = selected_compatibility == "lqe"
         if lqe_mode:
             for variable, value in (
                 (metadata, True), (lyrics_marker, True), (song_part, False),
@@ -1721,8 +1720,6 @@ def build_form_options(
                     variable.set(value)
             if background.get() == "keep":
                 background.set("normal")
-            if compatibility_format.get() != "lys":
-                compatibility_format.set("lys")
         elif selected_compatibility in {"enhanced", "eslrc"}:
             for variable, value in (
                 (lyrics_marker, True), (line_end, False), (agent, False),
@@ -1782,8 +1779,8 @@ def build_form_options(
                     state="normal" if button.cget("value") in {"lrc", "none"} else "disabled"
                 )
             for button in compatibility_buttons:
-                button.configure(state="disabled")
-            compatibility_hint.set("伪装 LQE：固定使用 LYS 的后置 (开始,持续时间) 标签。")
+                button.configure(state="normal")
+            compatibility_hint.set("LQE：固定使用 LYS 的后置 (开始,持续时间) 标签。")
         else:
             for control in lyrics_controls:
                 index = lyrics_controls.index(control)
@@ -1815,7 +1812,6 @@ def build_form_options(
     transliteration.trace_add("write", update_state)
     embed_attachments.trace_add("write", update_state)
     trailing.trace_add("write", update_state)
-    fake_lqe.trace_add("write", update_state)
     compatibility_format.trace_add("write", update_state)
     update_state()
 
@@ -1855,7 +1851,7 @@ def build_form_options(
                 embed_attachments=embed_attachments.get(),
                 write_translation_track=write_translation_track.get(),
                 write_transliteration_track=write_transliteration_track.get(),
-                fake_lqe=fake_lqe.get(),
+                fake_lqe=compatibility_format.get() == "lqe",
                 lqe_format="lys",
                 beat_format=compatibility_format.get() if compatibility_format.get() in {"qrc", "lys"} else "qrc",
                 compatibility_format=compatibility_format.get(),

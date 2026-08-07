@@ -36,7 +36,7 @@ python .\ttml_to_lrcn.py input.ttml --non-interactive `
 python .\ttml_to_lrcn.py input.ttml -o output.lrcn
 python .\ttml_to_lrcn.py input.ttml --stdout
 
-# 伪装为 Lyricify Quick Export
+# Lyricify Quick Export
 python .\ttml_to_lrcn.py input.ttml --non-interactive --fake-lqe
 ```
 
@@ -62,12 +62,12 @@ python .\ttml_to_lrcn.py input.ttml --non-interactive --fake-lqe
 | `--no-background` / `--background` | 分别省略/保留背景人声的兼容旧参数 |
 | `--[no-]trailing-end-marker` | 未保留行 end 时，是否在行尾追加结束时间戳 |
 | `--timing-tag-style angle\|square\|parenthesis` | 兼容旧用法；`parenthesis` 等同于选择 QRC 逐拍格式 |
-| `--compatibility-format enhanced\|eslrc\|qrc\|lys` | 自动调整主歌词为增强 LRC、ESLRC、QRC 或 Lyricify Syllable（Lys）格式 |
+| `--compatibility-format enhanced\|eslrc\|qrc\|lys\|lqe` | 自动调整主歌词为增强 LRC、ESLRC、QRC、LYS 或 LQE 格式 |
 | `--translation-output lrc\|none` | 是否输出翻译内容 |
 | `--no-embed-attachments` | 不将翻译、音译内嵌在主歌词中 |
 | `--write-translation-track` / `--write-transliteration-track` | 额外生成 `_trans.lrc` / `_pron.lrc` 独立轨道 |
 | `--fake-lqe` | 使用 Lyricify Quick Export 兼容预设，输出 `.lqe` |
-| `--lqe-format qrc\|lys` | 伪装 LQE 时选择 QRC 行时间格式或带对唱属性的 Lyricify Syllable（Lys）格式 |
+| `--lqe-format qrc\|lys` | 已弃用；LQE 固定使用 Lys |
 | `--[no-]attachment-language` | 保留或省略翻译、发音区段的 `[lang:...]` |
 | `--[no-]translation-language` / `--[no-]transliteration-language` | 分别控制翻译、音译标签是否写入语言信息 |
 | `--force` | 覆盖已存在的输出文件 |
@@ -113,9 +113,9 @@ python .\ttml_to_lrcn.py input.ttml --non-interactive --fake-lqe
 
 翻译与音译可内嵌到主歌词，也可额外导出独立轨道；仅导出独立轨道且未选择兼容格式时，主歌词使用 `.lnt`，翻译和音译文件分别以 `_trans.lrc`、`_pron.lrc` 结尾。翻译、音译的语言信息使用各自独立的开关。
 
-启用“伪装 Lyricify Quick Export”时，输出头固定为 `[Lyricify Quick Export]` 与 `[version:1.0]`，主歌词声明按所选项标记为 `format@QRC` 或 `format@Lyricify Syllable`，输出后缀固定为 `.lqe`。该预设会固定保留顶部数据、主歌词声明、行 `end`、逐字 `end`，并省略歌曲结构、agent、line ID；主歌词所有时间戳均使用整数毫秒，行和逐字的第二个时间值均改为持续时间，逐字标签以 `(开始,持续时间)` 的形式置于音节之后。不会追加行尾时间戳，也不会省略首个时间戳。翻译与发音保持标准 LRC 的补零秒制时间标签；可独立取消翻译标签的语言信息。背景人声不能保留为 `[x-bg]`，可改为普通行或省略。附属歌词的语言信息会合并到同一标签中，如 `[pronunciation: format@LRC, language@romaji]`。
+选择兼容格式中的 “LQE” 时，输出头固定为 `[Lyricify Quick Export]` 与 `[version:1.0]`，主歌词使用 Lyricify Syllable（Lys）格式，输出后缀固定为 `.lqe`。该预设会固定保留顶部数据、主歌词声明、行 `end`、逐字 `end`，并省略歌曲结构、agent、line ID；主歌词所有时间戳均使用整数毫秒，行和逐字的第二个时间值均改为持续时间，逐字标签以 `(开始,持续时间)` 的形式置于音节之后。不会追加行尾时间戳，也不会省略首个时间戳。翻译保持标准 LRC 的补零秒制时间标签，发音可选逐行或不输出。背景人声不能保留为 `[x-bg]`，可改为普通行或省略。
 
-伪装 LQE 的 `Lys` 选项输出 Lyricify Syllable 行属性：普通歌词为 `[4]`（左）或 `[5]`（右），背景人声为 `[7]`（左）或 `[8]`（右），并继承所属主句的方向。首个正常 Agent 默认左侧，但 Agent ID 为 `v2` 时默认右侧；后续正常歌词的 Agent ID 改变时切换方向。`type="group"` 固定左侧、`type="other"` 固定右侧，二者均不会影响下一句正常歌词的比较基准。
+LQE 使用 Lyricify Syllable 行属性：普通歌词为 `[4]`（左）或 `[5]`（右），背景人声为 `[7]`（左）或 `[8]`（右），并继承所属主句的方向。首个正常 Agent 默认左侧，但 Agent ID 为 `v2` 时默认右侧；后续正常歌词的 Agent ID 改变时切换方向。`type="group"` 固定左侧、`type="other"` 固定右侧，二者均不会影响下一句正常歌词的比较基准。
 
 </details>
 
