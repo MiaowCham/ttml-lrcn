@@ -1639,16 +1639,60 @@ def build_form_options(
     output_entry = ttk.Entry(output_box, textvariable=output_path, width=70)
     output_entry.grid(row=0, column=0, sticky="ew")
 
-    def choose_output() -> None:
+    def suggested_output_path() -> Path:
+        if output_path.get().strip():
+            return Path(output_path.get())
+        if input_value.get().strip():
+            source = Path(input_value.get())
+            suffix = ".lqe" if fake_lqe.get() else {
+                "enhanced": ".lrc", "eslrc": ".lrc", "qrc": ".qrc", "lys": ".lys",
+            }.get(compatibility_format.get(), ".lrcn")
+            return source.with_suffix(suffix)
+        return Path("output.lrcn")
+
+    def choose_output(initial: Path | None = None) -> Path | None:
+        suggested = initial or suggested_output_path()
         path = filedialog.asksaveasfilename(
             parent=root,
-            title="保存 LRCN 文件",
-            initialfile=Path(output_path.get() or "output.lrcn").name,
-            defaultextension=".lrcn",
-            filetypes=(("Lyrics Next", "*.lrcn"), ("LRC", "*.lrc"), ("所有文件", "*.*")),
+            title="选择输出文件",
+            initialdir=str(suggested.parent) if suggested.parent.exists() else None,
+            initialfile=suggested.name,
+            defaultextension=suggested.suffix or ".lrcn",
+            filetypes=(("歌词文件", "*.lrcn *.lrc *.qrc *.lys *.lqe *.lnt"), ("所有文件", "*.*")),
         )
         if path:
             output_path.set(path)
+            return Path(path)
+        return None
+
+    def resolve_existing_output(path: Path) -> Path | None:
+        """Ask how to handle a collision and return the selected writable path."""
+        while path.exists() and not args.force:
+            dialog = tk.Toplevel(root)
+            dialog.title("输出文件已存在")
+            dialog.resizable(False, False)
+            dialog.transient(root)
+            dialog.grab_set()
+            choice = tk.StringVar(value="cancel")
+            ttk.Label(dialog, text=f"{path.name} 已存在。", padding=(14, 12, 14, 4)).grid(row=0, column=0, columnspan=3)
+            ttk.Label(dialog, text="请选择处理方式：", padding=(14, 0, 14, 10)).grid(row=1, column=0, columnspan=3, sticky="w")
+            def close(value: str) -> None:
+                choice.set(value)
+                dialog.destroy()
+            ttk.Button(dialog, text="覆盖", command=lambda: close("overwrite")).grid(row=2, column=0, padx=(14, 6), pady=(0, 12))
+            ttk.Button(dialog, text="重命名…", command=lambda: close("rename")).grid(row=2, column=1, padx=6, pady=(0, 12))
+            ttk.Button(dialog, text="取消", command=lambda: close("cancel")).grid(row=2, column=2, padx=(6, 14), pady=(0, 12))
+            dialog.protocol("WM_DELETE_WINDOW", lambda: close("cancel"))
+            root.wait_window(dialog)
+            if choice.get() == "overwrite":
+                return path
+            if choice.get() == "cancel":
+                return None
+            renamed = choose_output(path)
+            if renamed is None:
+                return None
+            path = renamed
+        return path
 
     browse_button = ttk.Button(output_box, text="浏览…", command=choose_output)
     browse_button.grid(row=0, column=1, padx=(8, 0))
@@ -1815,9 +1859,9 @@ def build_form_options(
             if selected_output.resolve() == selected_input.resolve():
                 messagebox.showerror("输出路径无效", "输出文件不能覆盖输入 TTML 文件。", parent=root)
                 return
-            if selected_output.exists() and not args.force:
-                if not messagebox.askyesno("覆盖文件", f"{selected_output} 已存在，是否覆盖？", parent=root):
-                    return
+            selected_output = resolve_existing_output(selected_output)
+            if selected_output is None:
+                return
         try:
             root_element = ET.parse(selected_input).getroot()
             converted = convert(root_element, options)
