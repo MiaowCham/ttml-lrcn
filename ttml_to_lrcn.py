@@ -1667,6 +1667,14 @@ def build_form_options(
 
     def resolve_existing_output(path: Path) -> Path | None:
         """Ask how to handle a collision and return the selected writable path."""
+        def numbered_path(original: Path) -> Path:
+            index = 1
+            while True:
+                candidate = original.with_name(f"{original.stem} ({index}){original.suffix}")
+                if not candidate.exists():
+                    return candidate
+                index += 1
+
         while path.exists() and not args.force:
             dialog = tk.Toplevel(root)
             dialog.title("输出文件已存在")
@@ -1688,10 +1696,8 @@ def build_form_options(
                 return path
             if choice.get() == "cancel":
                 return None
-            renamed = choose_output(path)
-            if renamed is None:
-                return None
-            path = renamed
+            path = numbered_path(path)
+            output_path.set(str(path))
         return path
 
     browse_button = ttk.Button(output_box, text="浏览…", command=choose_output)
