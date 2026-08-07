@@ -26,7 +26,7 @@ python .\ttml_to_lrcn.py input.ttml --non-interactive -o output.lrcn
 
 # 输出纯 LRC（兼容扩展）
 python .\ttml_to_lrcn.py input.ttml --non-interactive `
-  --translation none --transliteration none --background-mode omit `
+  --translation-output none --transliteration none --background-mode omit `
   --no-metadata --no-lyrics-marker --no-song-part `
   --no-line-end --no-agent --no-line-id --no-syllable-end --no-first-syllable-tag `
   --trailing-end-marker -o output.lrc --force
@@ -46,7 +46,7 @@ python .\ttml_to_lrcn.py input.ttml --non-interactive --fake-lqe
 
 | 参数 | 作用 |
 | --- | --- |
-| `--translation lnt-full\|lnt-short\|lrc\|none` | 附属歌词标签格式（翻译和发音）：LNT 完整、LNT 精简、LRC 或不输出 |
+| `--translation lnt-full\|lnt-short\|lrc` | 附属歌词标签格式：LNT 完整、LNT 精简或 LRC |
 | `--transliteration lrcn\|lrc\|both\|none` | 发音输出：按节拍划分、逐行、按节拍划分加逐行或不输出；标签格式为 LRC 时只能逐行或不输出 |
 | `--[no-]metadata` | 保留或省略顶部 Lyrics Next 元数据 |
 | `--[no-]lyrics-marker` | 保留或省略主歌词格式声明 |
@@ -61,10 +61,13 @@ python .\ttml_to_lrcn.py input.ttml --non-interactive --fake-lqe
 | `--[no-]trailing-end-marker` | 未保留行 end 时，是否在行尾追加结束时间戳 |
 | `--timing-tag-style angle\|square\|parenthesis` | 兼容旧用法；`parenthesis` 等同于选择 QRC 逐拍格式 |
 | `--compatibility-format enhanced\|eslrc\|qrc\|lys` | 自动调整主歌词为增强 LRC、ESLRC、QRC 或 Lyricify Syllable（Lys）格式 |
+| `--translation-output lrc\|none` | 是否输出翻译内容 |
+| `--no-embed-attachments` | 不将翻译、音译内嵌在主歌词中 |
+| `--write-translation-track` / `--write-transliteration-track` | 额外生成 `_trans.lrc` / `_pron.lrc` 独立轨道 |
 | `--fake-lqe` | 使用 Lyricify Quick Export 兼容预设，输出 `.lqe` |
 | `--lqe-format qrc\|lys` | 伪装 LQE 时选择 QRC 行时间格式或带对唱属性的 Lyricify Syllable（Lys）格式 |
 | `--[no-]attachment-language` | 保留或省略翻译、发音区段的 `[lang:...]` |
-| `--[no-]translation-language` | LQE 模式下独立控制翻译标签是否写入语言信息 |
+| `--[no-]translation-language` / `--[no-]transliteration-language` | 分别控制翻译、音译标签是否写入语言信息 |
 | `--force` | 覆盖已存在的输出文件 |
 
 “保留翻译和发音区段的语言”位于表单的“翻译与发音”区块。未指定的选项在交互模式下逐项询问；在非交互模式下附属歌词标签默认采用 LNT 完整，发音默认同时输出按节拍和逐行格式。若标签格式为 LRC，发音只能逐行或不输出；若不输出附属歌词，发音也会关闭。若省略主歌词 `line`，LNT 完整/LNT 精简和逐拍发音均不可用，脚本会拒绝冲突的参数。
@@ -104,7 +107,9 @@ python .\ttml_to_lrcn.py input.ttml --non-interactive --fake-lqe
 
 每个逐拍发音区段之后还会自动生成一个 `[transliteration: format@LRC]` 逐行发音区段。脚本提取非背景的叶子音节、清理音节边缘已有空白，再用单个空格拼接，例如 `[8.175]ashi moto ni chirabaru kotoba`。
 
-“兼容格式”可直接选择增强 LRC、ESLRC、QRC 或 Lys。增强 LRC / ESLRC 会自动省略主行扩展字段、将背景人声改为普通行（或省略）并追加对应样式的行尾结束时间；QRC / Lys 会自动使用整数毫秒、行和逐字的持续时间，并把逐字 `(开始,持续时间)` 放在音节之后。QRC / Lys 不会启用 LQE 头部伪装，仍按普通 LRCN 输出。
+“兼容格式”可直接选择“不使用（LRCN）”、增强 LRC、ESLRC、QRC 或 Lys；强制字段在表单中会灰显。增强 LRC / ESLRC 会自动省略主行扩展字段、将背景人声改为普通行（或省略）并追加对应样式的行尾结束时间；QRC / Lys 会自动使用整数毫秒、行和逐字的持续时间，并把逐字 `(开始,持续时间)` 放在音节之后。未内嵌翻译或音译时，四种兼容格式的主文件后缀依次为 `.lrc`、`.lrc`、`.qrc`、`.lys`。
+
+翻译与音译可内嵌到主歌词，也可额外导出独立轨道；仅导出独立轨道且未选择兼容格式时，主歌词使用 `.lnt`，翻译和音译文件分别以 `_trans.lrc`、`_pron.lrc` 结尾。翻译、音译的语言信息使用各自独立的开关。
 
 启用“伪装 Lyricify Quick Export”时，输出头固定为 `[Lyricify Quick Export]` 与 `[version:1.0]`，主歌词声明按所选项标记为 `format@QRC` 或 `format@Lyricify Syllable`，输出后缀固定为 `.lqe`。该预设会固定保留顶部数据、主歌词声明、行 `end`、逐字 `end`，并省略歌曲结构、agent、line ID；主歌词所有时间戳均使用整数毫秒，行和逐字的第二个时间值均改为持续时间，逐字标签以 `(开始,持续时间)` 的形式置于音节之后。不会追加行尾时间戳，也不会省略首个时间戳。翻译与发音保持标准 LRC 的补零秒制时间标签；可独立取消翻译标签的语言信息。背景人声不能保留为 `[x-bg]`，可改为普通行或省略。附属歌词的语言信息会合并到同一标签中，如 `[pronunciation: format@LRC, language@romaji]`。
 

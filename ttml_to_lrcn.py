@@ -87,9 +87,14 @@ class ConversionOptions:
     background_as_line: bool = False
     append_end_marker: bool = False
     timing_tag_style: str = "angle"
-    include_attachment_language: bool = True
+    include_attachment_language: bool = True  # Deprecated aggregate switch.
     include_translation_language: bool = True
+    include_transliteration_language: bool = True
+    embed_attachments: bool = True
+    write_translation_track: bool = False
+    write_transliteration_track: bool = False
     translation_format: str = "lnt-full"
+    translation_output: str = "lrc"
     transliteration_format: str = "both"
     fake_lqe: bool = False
     lqe_format: str = "qrc"
@@ -97,10 +102,12 @@ class ConversionOptions:
     compatibility_format: str = "none"
 
     def validate(self) -> None:
-        translation_formats = {"lnt-full", "lnt-short", "lrc", "none"}
+        translation_formats = {"lnt-full", "lnt-short", "lrc"}
         formats = {"lrcn", "lrc", "both", "none"}
         if self.translation_format not in translation_formats:
             raise ValueError(f"无效的翻译格式：{self.translation_format}")
+        if self.translation_output not in {"lrc", "none"}:
+            raise ValueError(f"无效的翻译输出：{self.translation_output}")
         if self.transliteration_format not in formats:
             raise ValueError(f"无效的发音格式：{self.transliteration_format}")
         if self.timing_tag_style not in {"angle", "square", "parenthesis"}:
@@ -111,8 +118,8 @@ class ConversionOptions:
             raise ValueError(f"无效的逐拍格式：{self.beat_format}")
         if self.compatibility_format not in {"none", "enhanced", "eslrc", "qrc", "lys"}:
             raise ValueError(f"无效的兼容格式：{self.compatibility_format}")
-        if (self.translation_format != "none" or self.transliteration_format != "none") and not self.include_lyrics_marker:
-            raise OptionConflict("输出翻译或发音时必须保留主歌词格式声明")
+        if has_embedded_attachments(self) and not self.include_lyrics_marker:
+            raise OptionConflict("内嵌翻译或发音时必须保留主歌词格式声明")
         if not self.include_line_id and (
             self.translation_format in {"lnt-full", "lnt-short"}
             or self.transliteration_format in {"lrcn", "both"}
@@ -120,10 +127,6 @@ class ConversionOptions:
             raise OptionConflict("主歌词省略 line 时不允许使用 LRCN Trans 格式")
         if self.translation_format == "lrc" and self.transliteration_format not in {"lrc", "none"}:
             raise OptionConflict("标签格式为 LRC 时，发音只能逐行输出或不输出")
-        if self.translation_format == "none" and self.transliteration_format != "none":
-            raise OptionConflict("不输出附属歌词时，发音也必须设为不输出")
-        if self.translation_format == "none" and self.include_attachment_language:
-            raise OptionConflict("不输出附属歌词时不能保留附属歌词语言")
         if (
             self.append_end_marker
             and not self.fake_lqe
@@ -224,10 +227,22 @@ def compatibility_extension_eligible(options: ConversionOptions) -> bool:
     )
 
 
+def has_embedded_attachments(options: ConversionOptions) -> bool:
+    return options.embed_attachments and (
+        options.translation_output != "none" or options.transliteration_format != "none"
+    )
+
+
 def output_suffix(options: ConversionOptions) -> str:
     """Choose the default suffix after all output options are known."""
     if options.fake_lqe:
         return ".lqe"
+    if not has_embedded_attachments(options):
+        suffixes = {"enhanced": ".lrc", "eslrc": ".lrc", "qrc": ".qrc", "lys": ".lys"}
+        if options.compatibility_format in suffixes:
+            return suffixes[options.compatibility_format]
+        if options.write_translation_track or options.write_transliteration_track:
+            return ".lnt"
     has_main_lyrics_options = any(
         (
             options.include_header,
@@ -240,10 +255,7 @@ def output_suffix(options: ConversionOptions) -> str:
             options.include_first_syllable_tag,
         )
     )
-    has_attachments = (
-        options.translation_format != "none"
-        or options.transliteration_format != "none"
-    )
+    has_attachments = has_embedded_attachments(options)
     if options.append_end_marker and not has_main_lyrics_options and not has_attachments:
         return ".lrc"
     return ".lrcn"
@@ -270,8 +282,11 @@ def force_fake_lqe(options: ConversionOptions) -> ConversionOptions:
         append_end_marker=False,
         timing_tag_style="parenthesis",
         translation_format="lrc",
+        translation_output="lrc",
         transliteration_format="lrc",
         fake_lqe=True,
+        lqe_format="lys",
+        compatibility_format="lys",
     )
 
 
@@ -810,6 +825,73 @@ def render_line_transliteration(
     return lines
 
 
+def render_external_tracks(root: ET.Element, options: ConversionOptions) -> dict[str, str]:
+    """Render requested translation/pronunciation companion LRC files."""
+    if not (options.write_translation_track or options.write_transliteration_track):
+        return {}
+    context = time_context(root)
+    body = next((node for node in root.iter() if local_name(node.tag) == "body"), None)
+    if body is None:
+        raise ValueError("TTML 中缺少 body 元素")
+    line_starts: dict[str, str] = {}
+    background_refs: dict[str, list[BackgroundReference]] = {}
+    generated_id = generated_background_id = 0
+
+    def visit(container: ET.Element) -> None:
+        nonlocal generated_id, generated_background_id
+        for child in container:
+            if local_name(child.tag) == "div":
+                visit(child)
+                continue
+            if local_name(child.tag) != "p":
+                continue
+            generated_id += 1
+            line_id = apple_attr(child, "key", f"L{generated_id}") or f"L{generated_id}"
+            begin, end = child.get("begin"), child.get("end")
+            if not begin:
+                continue
+            line_starts.setdefault(line_id, format_lrc_time(begin, context))
+            if options.include_background and options.background_as_line:
+                for background in (node for node in child if has_role(node, "x-bg")):
+                    bounds = timed_bounds(background, context)
+                    if bounds is None:
+                        continue
+                    generated_background_id += 1
+                    background_refs.setdefault(line_id, []).append(
+                        BackgroundReference(
+                            f"B{generated_background_id}",
+                            format_lrc_time(bounds[0], context),
+                            format_lrc_time(bounds[1], context),
+                        )
+                    )
+
+    visit(body)
+    translations: list[ET.Element] = []
+    transliterations: list[ET.Element] = []
+    for node in root.iter():
+        if local_name(node.tag) == "translations":
+            translations.extend(iter_children_named(node, "translation"))
+        elif local_name(node.tag) == "transliterations":
+            transliterations.extend(iter_children_named(node, "transliteration"))
+    mode = "normal" if options.background_as_line else "keep"
+    tracks: dict[str, str] = {}
+    if options.write_translation_track:
+        sections = [render_lrc_attachment("translate", group, line_starts, options.include_translation_language,
+                                          options.include_background, mode, background_refs, False)
+                    for group in translations]
+        text = "\n\n".join("\n".join(section) for section in sections if section)
+        if text:
+            tracks["_trans.lrc"] = text.rstrip() + "\n"
+    if options.write_transliteration_track:
+        sections = [render_line_transliteration(group, line_starts, options.include_transliteration_language,
+                                                 options.include_background, mode, background_refs, False)
+                    for group in transliterations]
+        text = "\n\n".join("\n".join(section) for section in sections if section)
+        if text:
+            tracks["_pron.lrc"] = text.rstrip() + "\n"
+    return tracks
+
+
 def convert(root: ET.Element, options: ConversionOptions | None = None) -> str:
     options = options or ConversionOptions()
     options = apply_compatibility_format(options)
@@ -849,7 +931,12 @@ def convert(root: ET.Element, options: ConversionOptions | None = None) -> str:
             transliterations.extend(iter_children_named(node, "transliteration"))
     if lines:
         lines.append("")
-    if options.include_lyrics_marker:
+    emit_lyrics_marker = (
+        options.fake_lqe
+        or options.compatibility_format != "none"
+        or has_embedded_attachments(options)
+    )
+    if emit_lyrics_marker:
         if options.fake_lqe:
             marker = "Lyricify Syllable" if options.lqe_format == "lys" else "QRC"
             lines.append(f"[lyrics: format@{marker}]")
@@ -997,7 +1084,7 @@ def convert(root: ET.Element, options: ConversionOptions | None = None) -> str:
 
     render_container(body)
 
-    if options.translation_format in {"lnt-full", "lnt-short"}:
+    if options.embed_attachments and options.translation_output != "none" and options.translation_format in {"lnt-full", "lnt-short"}:
         for group in translations:
             lines.extend(
                 [""]
@@ -1008,7 +1095,7 @@ def convert(root: ET.Element, options: ConversionOptions | None = None) -> str:
                     line_starts,
                     options.include_syllable_end,
                     options.include_background,
-                    options.include_attachment_language,
+                    options.include_translation_language,
                     options.include_first_syllable_tag,
                     options.timing_tag_style,
                     "normal" if options.background_as_line else "keep",
@@ -1016,7 +1103,7 @@ def convert(root: ET.Element, options: ConversionOptions | None = None) -> str:
                     options.translation_format == "lnt-short",
                 )
             )
-    if options.translation_format == "lrc":
+    if options.embed_attachments and options.translation_output != "none" and options.translation_format == "lrc":
         for group in translations:
             lines.extend(
                 [""]
@@ -1024,14 +1111,14 @@ def convert(root: ET.Element, options: ConversionOptions | None = None) -> str:
                     "translate",
                     group,
                     line_starts,
-                    options.include_attachment_language and options.include_translation_language,
+                    options.include_translation_language,
                     options.include_background,
                     "normal" if options.background_as_line else "keep",
                     background_refs,
                     options.fake_lqe,
                 )
             )
-    if options.transliteration_format in {"lrcn", "both"}:
+    if options.embed_attachments and options.transliteration_format in {"lrcn", "both"}:
         for group in transliterations:
             lines.extend(
                 [""]
@@ -1042,7 +1129,7 @@ def convert(root: ET.Element, options: ConversionOptions | None = None) -> str:
                     line_starts,
                     options.include_syllable_end,
                     options.include_background,
-                    options.include_attachment_language,
+                    options.include_transliteration_language,
                     options.include_first_syllable_tag,
                     options.timing_tag_style,
                     "normal" if options.background_as_line else "keep",
@@ -1050,14 +1137,14 @@ def convert(root: ET.Element, options: ConversionOptions | None = None) -> str:
                     options.translation_format == "lnt-short",
                 )
             )
-    if options.transliteration_format in {"lrc", "both"}:
+    if options.embed_attachments and options.transliteration_format in {"lrc", "both"}:
         for group in transliterations:
             lines.extend(
                 [""]
                 + render_line_transliteration(
                     group,
                     line_starts,
-                    options.include_attachment_language,
+                    options.include_transliteration_language,
                     options.include_background,
                     "normal" if options.background_as_line else "keep",
                     background_refs,
@@ -1095,11 +1182,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--lqe-format",
         choices=("qrc", "lys"),
         default="qrc",
-        help="伪装 LQE 时使用 QRC 或 Lyricify Syllable（Lys）行格式",
+        help="已弃用；伪装 LQE 固定使用 Lys",
     )
     parser.add_argument(
         "--translation",
-        choices=("lnt-full", "lnt-short", "lrc", "none"),
+        choices=("lnt-full", "lnt-short", "lrc"),
         help="翻译输出格式",
     )
     parser.add_argument(
@@ -1107,6 +1194,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=("lrcn", "lrc", "both", "none"),
         help="发音输出格式：逐字、逐行、两者或不输出",
     )
+    parser.add_argument("--translation-output", choices=("lrc", "none"), default="lrc", help="是否输出翻译")
+    parser.add_argument("--no-embed-attachments", dest="embed_attachments", action="store_false", help="不在主歌词中内嵌翻译和发音")
+    parser.add_argument("--write-translation-track", action="store_true", help="额外输出 _trans.lrc")
+    parser.add_argument("--write-transliteration-track", action="store_true", help="额外输出 _pron.lrc")
     background = parser.add_mutually_exclusive_group()
     background.add_argument(
         "--background-mode",
@@ -1153,7 +1244,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ("syllable-end", "保留逐字结束时间"),
         ("first-syllable-tag", "保留每行首个节拍标签"),
         ("attachment-language", "保留翻译和发音区段语言"),
-        ("translation-language", "翻译区段添加语言信息（LQE 可独立关闭）"),
+        ("translation-language", "翻译区段添加语言信息"),
+        ("transliteration-language", "发音区段添加语言信息"),
     )
     for flag, help_text in boolean_options:
         parser.add_argument(
@@ -1283,9 +1375,12 @@ def build_options(args: argparse.Namespace, interactive: bool) -> ConversionOpti
             "attachment_language", "保留翻译和发音区段的 [lang:...] 吗？"
         )
     include_translation_language = (
-        ask_bool("translation_language", "LQE 翻译添加语言信息吗？")
-        if args.fake_lqe and translation_format != "none"
+        ask_bool("translation_language", "翻译区段添加语言信息吗？")
+        if translation_format != "none"
         else option_value(getattr(args, "translation_language", None), True)
+    )
+    include_transliteration_language = option_value(
+        getattr(args, "transliteration_language", None), True
     )
 
     include_syllable_end = ask_bool("syllable_end", "保留逐字标签中的 end 时间吗？")
@@ -1305,8 +1400,13 @@ def build_options(args: argparse.Namespace, interactive: bool) -> ConversionOpti
         background_as_line=background_mode == "normal",
         include_attachment_language=include_attachment_language,
         include_translation_language=include_translation_language,
+        include_transliteration_language=include_transliteration_language,
         translation_format=translation_format,
+        translation_output=args.translation_output,
         transliteration_format=transliteration_format,
+        embed_attachments=args.embed_attachments,
+        write_translation_track=args.write_translation_track,
+        write_transliteration_track=args.write_transliteration_track,
         lqe_format=args.lqe_format,
     )
     if interactive and args.compatibility_format is None:
@@ -1354,8 +1454,13 @@ def build_options(args: argparse.Namespace, interactive: bool) -> ConversionOpti
         timing_tag_style=timing_tag_style,
         include_attachment_language=include_attachment_language,
         include_translation_language=include_translation_language,
+        include_transliteration_language=include_transliteration_language,
         translation_format=translation_format,
+        translation_output=args.translation_output,
         transliteration_format=transliteration_format,
+        embed_attachments=args.embed_attachments,
+        write_translation_track=args.write_translation_track,
+        write_transliteration_track=args.write_transliteration_track,
         lqe_format=args.lqe_format,
         beat_format=(args.compatibility_format if args.compatibility_format in {"qrc", "lys"} else "qrc"),
         compatibility_format=(compatibility_format or ("qrc" if timing_tag_style == "parenthesis" else "none")),
@@ -1410,7 +1515,11 @@ def build_form_options(
         or ("qrc" if tag_style.get() == "parenthesis" else "none")
     )
     fake_lqe = tk.BooleanVar(value=bool(getattr(args, "fake_lqe", False)))
-    lqe_format = tk.StringVar(value=getattr(args, "lqe_format", "qrc"))
+    embed_attachments = tk.BooleanVar(value=True)
+    write_translation_track = tk.BooleanVar(value=False)
+    write_transliteration_track = tk.BooleanVar(value=False)
+    translation_output = tk.StringVar(value="lrc")
+    transliteration_language = tk.BooleanVar(value=True)
     output_path = tk.StringVar(value=str(default_output) if default_output else "")
     input_value = tk.StringVar(value=str(input_path) if input_path else "")
 
@@ -1443,7 +1552,6 @@ def build_form_options(
     for index, (label, variable) in enumerate(
         (
             ("保留顶部元数据", metadata),
-            ("保留主歌词格式声明", lyrics_marker),
             ("保留歌曲结构", song_part),
             ("保留行 end", line_end),
             ("保留 agent", agent),
@@ -1460,10 +1568,6 @@ def build_form_options(
     ttk.Checkbutton(
         lyrics_box, text="伪装 Lyricify Quick Export（.lqe）", variable=fake_lqe
     ).grid(row=3, column=0, sticky="w", pady=(5, 0))
-    qrc_button = ttk.Radiobutton(lyrics_box, text="QRC", variable=lqe_format, value="qrc")
-    lys_button = ttk.Radiobutton(lyrics_box, text="Lys", variable=lqe_format, value="lys")
-    qrc_button.grid(row=3, column=1, sticky="w", pady=(5, 0))
-    lys_button.grid(row=3, column=2, sticky="w", pady=(5, 0))
 
     background_box = ttk.LabelFrame(outer, text="背景人声", padding=8)
     background_box.grid(row=2, column=0, sticky="ew", pady=(0, 8))
@@ -1482,33 +1586,39 @@ def build_form_options(
     ttk.Label(attachment_box, text="标签格式（翻译和发音）：").grid(row=0, column=0, sticky="w")
     translation_buttons: list[ttk.Radiobutton] = []
     for column, (value, label) in enumerate(
-        (("lnt-full", "LNT 完整"), ("lnt-short", "LNT 精简"), ("lrc", "LRC"), ("none", "不输出")),
+        (("lnt-full", "LNT 完整"), ("lnt-short", "LNT 精简"), ("lrc", "LRC")),
         1,
     ):
         button = ttk.Radiobutton(attachment_box, text=label, variable=translation, value=value)
         button.grid(row=0, column=column, sticky="w", padx=(0, 10))
         translation_buttons.append(button)
-    ttk.Label(attachment_box, text="发音输出选项：").grid(row=1, column=0, sticky="w", pady=(5, 0))
+    ttk.Label(attachment_box, text="翻译输出：").grid(row=1, column=0, sticky="w", pady=(5, 0))
+    ttk.Radiobutton(attachment_box, text="逐行 LRC", variable=translation_output, value="lrc").grid(row=1, column=1, sticky="w", pady=(5, 0))
+    ttk.Radiobutton(attachment_box, text="不输出", variable=translation_output, value="none").grid(row=1, column=2, sticky="w", pady=(5, 0))
+    ttk.Label(attachment_box, text="发音输出选项：").grid(row=2, column=0, sticky="w", pady=(5, 0))
     transliteration_buttons: list[ttk.Radiobutton] = []
     for column, (value, label) in enumerate(
         (("lrcn", "按节拍划分（如有）"), ("both", "节拍（如有）+逐行"), ("lrc", "逐行"), ("none", "不输出")),
         1,
     ):
         button = ttk.Radiobutton(attachment_box, text=label, variable=transliteration, value=value)
-        button.grid(row=1, column=column, sticky="w", padx=(0, 10), pady=(5, 0))
+        button.grid(row=2, column=column, sticky="w", padx=(0, 10), pady=(5, 0))
         transliteration_buttons.append(button)
     attachment_language_check = ttk.Checkbutton(
         attachment_box,
-        text="保留翻译和发音区段的 [lang:…]",
-        variable=attachment_language,
-    )
-    attachment_language_check.grid(row=2, column=0, columnspan=5, sticky="w", pady=(6, 0))
-    translation_language_check = ttk.Checkbutton(
-        attachment_box,
-        text="LQE 翻译添加语言信息",
+        text="翻译添加语言信息",
         variable=translation_language,
     )
-    translation_language_check.grid(row=3, column=0, columnspan=5, sticky="w", pady=(2, 0))
+    attachment_language_check.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
+    transliteration_language_check = ttk.Checkbutton(
+        attachment_box,
+        text="发音添加语言信息",
+        variable=transliteration_language,
+    )
+    transliteration_language_check.grid(row=3, column=2, columnspan=2, sticky="w", pady=(6, 0))
+    ttk.Checkbutton(attachment_box, text="内嵌附属歌词", variable=embed_attachments).grid(row=4, column=0, sticky="w", pady=(4, 0))
+    ttk.Checkbutton(attachment_box, text="输出翻译文件（_trans.lrc）", variable=write_translation_track).grid(row=4, column=1, columnspan=2, sticky="w", pady=(4, 0))
+    ttk.Checkbutton(attachment_box, text="输出音译文件（_pron.lrc）", variable=write_transliteration_track).grid(row=4, column=3, columnspan=2, sticky="w", pady=(4, 0))
 
     trailing_box = ttk.LabelFrame(outer, text="兼容格式", padding=8)
     trailing_box.grid(row=4, column=0, sticky="ew", pady=(0, 8))
@@ -1558,6 +1668,8 @@ def build_form_options(
                     variable.set(value)
             if background.get() == "keep":
                 background.set("normal")
+            if compatibility_format.get() != "lys":
+                compatibility_format.set("lys")
         elif selected_compatibility in {"enhanced", "eslrc"}:
             for variable, value in (
                 (lyrics_marker, True), (line_end, False), (agent, False),
@@ -1588,29 +1700,19 @@ def build_form_options(
         if not has_line_id and translation.get() in {"lnt-full", "lnt-short"}:
             translation.set("lrc")
         lrc_format = translation.get() == "lrc"
-        no_attachments = translation.get() == "none"
+        no_attachments = translation_output.get() == "none" and transliteration.get() == "none"
         for button in transliteration_buttons:
             value = button.cget("value")
             enabled = not no_attachments and (not lrc_format or value in {"lrc", "none"})
             button.configure(state="normal" if enabled else "disabled")
         if (not has_line_id or lrc_format) and transliteration.get() in {"lrcn", "both"}:
             transliteration.set("lrc")
-        if no_attachments:
-            transliteration.set("none")
-            attachment_language.set(False)
         attachment_language_check.configure(
-            state="disabled" if no_attachments else "normal"
+            state="normal" if translation_output.get() != "none" else "disabled"
         )
-        translation_language_check.configure(
-            state="normal" if lqe_mode and not no_attachments and attachment_language.get() else "disabled"
+        transliteration_language_check.configure(
+            state="normal" if transliteration.get() != "none" else "disabled"
         )
-        attachments_enabled = not no_attachments or transliteration.get() != "none"
-        if attachments_enabled:
-            if not lyrics_marker.get():
-                lyrics_marker.set(True)
-            lyrics_controls[1].configure(state="disabled")
-        else:
-            lyrics_controls[1].configure(state="normal")
         if lqe_mode:
             if trailing.get():
                 trailing.set(False)
@@ -1624,21 +1726,26 @@ def build_form_options(
                 button.configure(state="disabled")
             for button in compatibility_buttons:
                 button.configure(state="disabled")
-            compatibility_hint.set("伪装 LQE：QRC 使用后置 (开始,持续时间) 标签。")
+            compatibility_hint.set("伪装 LQE：固定使用 LYS 的后置 (开始,持续时间) 标签。")
         else:
             for control in lyrics_controls:
-                if control is not lyrics_controls[1] or not attachments_enabled:
-                    control.configure(state="normal")
-            for button in background_buttons:
-                button.configure(state="normal")
+                index = lyrics_controls.index(control)
+                control.configure(
+                    state="disabled" if selected_compatibility != "none" and index >= 2 else "normal"
+                )
+            for index, button in enumerate(background_buttons):
+                button.configure(
+                    state="disabled" if selected_compatibility != "none" and index == 0 else "normal"
+                )
             for button in compatibility_buttons:
                 button.configure(state="normal")
-            compatibility_hint.set(
-                "增强 LRC/ESLRC 会省略主行扩展并追加行尾时间；QRC/LYS 使用毫秒后置 (开始,持续时间) 逐拍标签。"
-            )
-        lqe_button_state = "normal" if lqe_mode else "disabled"
-        qrc_button.configure(state=lqe_button_state)
-        lys_button.configure(state=lqe_button_state)
+            compatibility_hint.set({
+                "none": "LRCN：保留当前主歌词字段；无内嵌翻译/音译时不写格式声明。",
+                "enhanced": "增强 LRC：省略主行扩展，使用 <> 行尾结束时间，输出 .lrc。",
+                "eslrc": "ESLRC：省略主行扩展，使用 [] 行尾结束时间，输出 .lrc。",
+                "qrc": "QRC：毫秒与后置 (开始,持续时间) 逐拍标签，输出 .qrc。",
+                "lys": "LYS：带行属性的毫秒逐拍标签，输出 .lys。",
+            }[selected_compatibility])
 
     line_id.trace_add("write", update_state)
     line_end.trace_add("write", update_state)
@@ -1647,7 +1754,9 @@ def build_form_options(
     first_syllable.trace_add("write", update_state)
     background.trace_add("write", update_state)
     translation.trace_add("write", update_state)
-    attachment_language.trace_add("write", update_state)
+    translation_output.trace_add("write", update_state)
+    transliteration.trace_add("write", update_state)
+    embed_attachments.trace_add("write", update_state)
     trailing.trace_add("write", update_state)
     fake_lqe.trace_add("write", update_state)
     compatibility_format.trace_add("write", update_state)
@@ -1682,10 +1791,15 @@ def build_form_options(
                 timing_tag_style=tag_style.get(),
                 include_attachment_language=attachment_language.get(),
                 include_translation_language=translation_language.get(),
+                include_transliteration_language=transliteration_language.get(),
                 translation_format=translation.get(),
+                translation_output=translation_output.get(),
                 transliteration_format=transliteration.get(),
+                embed_attachments=embed_attachments.get(),
+                write_translation_track=write_translation_track.get(),
+                write_transliteration_track=write_transliteration_track.get(),
                 fake_lqe=fake_lqe.get(),
-                lqe_format=lqe_format.get(),
+                lqe_format="lys",
                 beat_format=compatibility_format.get() if compatibility_format.get() in {"qrc", "lys"} else "qrc",
                 compatibility_format=compatibility_format.get(),
             )
@@ -1706,7 +1820,8 @@ def build_form_options(
                 if not messagebox.askyesno("覆盖文件", f"{selected_output} 已存在，是否覆盖？", parent=root):
                     return
         try:
-            converted = convert(ET.parse(selected_input).getroot(), options)
+            root_element = ET.parse(selected_input).getroot()
+            converted = convert(root_element, options)
             if copy_to_clipboard:
                 root.clipboard_clear()
                 root.clipboard_append(converted)
@@ -1718,7 +1833,13 @@ def build_form_options(
             else:
                 assert selected_output is not None
                 selected_output.write_text(converted, encoding="utf-8", newline="\n")
-                status.set(f"已生成：{selected_output}；窗口保持打开，可继续转换。")
+                written_tracks: list[Path] = []
+                for suffix, content in render_external_tracks(root_element, options).items():
+                    track_path = selected_output.with_name(selected_output.stem + suffix)
+                    track_path.write_text(content, encoding="utf-8", newline="\n")
+                    written_tracks.append(track_path)
+                track_text = "" if not written_tracks else "；" + "、".join(str(path) for path in written_tracks)
+                status.set(f"已生成：{selected_output}{track_text}；窗口保持打开，可继续转换。")
         except (ET.ParseError, OSError, ValueError) as exc:
             messagebox.showerror("转换失败", str(exc), parent=root)
 
@@ -1728,7 +1849,7 @@ def build_form_options(
     ttk.Button(buttons, text="取消", command=cancel).grid(row=0, column=0, padx=(0, 8))
     convert_button = ttk.Button(buttons, text="开始转换", command=submit)
     convert_button.grid(row=0, column=1)
-    convert_button.bind("<Shift-Button-1>", lambda _event: submit(True) or "break")
+    convert_button.bind("<Control-Button-1>", lambda _event: submit(True) or "break")
     root.protocol("WM_DELETE_WINDOW", cancel)
     root.bind("<Return>", lambda _event: submit())
     root.bind("<Escape>", lambda _event: cancel())
@@ -1832,6 +1953,8 @@ def main(argv: list[str] | None = None) -> int:
                 if not interactive or not prompt_yes_no(f"{output} 已存在，是否覆盖？", False):
                     raise ValueError(f"输出文件已存在：{output}（使用 --force 覆盖）")
             output.write_text(result, encoding="utf-8", newline="\n")
+            for suffix, content in render_external_tracks(root, options).items():
+                output.with_name(output.stem + suffix).write_text(content, encoding="utf-8", newline="\n")
             print(f"已生成：{output}")
     except OptionConflict as exc:
         print(f"参数错误：{exc}", file=sys.stderr)
