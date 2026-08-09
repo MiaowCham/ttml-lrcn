@@ -204,7 +204,9 @@ def apply_compatibility_format(options: ConversionOptions) -> ConversionOptions:
         include_agent=False,
         include_line_id=False,
         include_syllable_end=False,
-        include_first_syllable_tag=False,
+        include_first_syllable_tag=(
+            options.include_first_syllable_tag if selected == "enhanced" else False
+        ),
         include_background=options.include_background,
         background_as_line=options.include_background,
         append_end_marker=True,
@@ -227,7 +229,6 @@ def compatibility_extension_eligible(options: ConversionOptions) -> bool:
         and not options.include_agent
         and not options.include_line_id
         and not options.include_syllable_end
-        and not options.include_first_syllable_tag
         and (not options.include_background or options.background_as_line)
     )
 
@@ -529,7 +530,7 @@ def main_timed_leaves(container: ET.Element) -> list[ET.Element]:
 
     def visit(parent: ET.Element) -> None:
         for child in parent:
-            if has_role(child, "x-bg"):
+            if not has_role(container, "x-bg") and has_role(child, "x-bg"):
                 continue
             if len(child):
                 visit(child)
@@ -552,7 +553,12 @@ def omit_first_syllable_tag(
     if len(leaves) < 2:
         return content
     first_direct = next(
-        (child for child in container if not has_role(child, "x-bg")), None
+        (
+            child
+            for child in container
+            if has_role(container, "x-bg") or not has_role(child, "x-bg")
+        ),
+        None,
     )
     if first_direct is not leaves[0]:
         return content
@@ -950,7 +956,6 @@ def convert(root: ET.Element, options: ConversionOptions | None = None) -> str:
         lines.append("")
     emit_lyrics_marker = (
         options.fake_lqe
-        or options.compatibility_format in {"enhanced", "eslrc"}
         or has_embedded_attachments(options)
     )
     if emit_lyrics_marker:
@@ -1569,6 +1574,58 @@ def build_form_options(
 
     ttk.Button(input_box, text="浏览…", command=choose_input).grid(row=0, column=1, padx=(8, 0))
 
+    def enable_windows_file_drop() -> None:
+        """Accept dropped files through the native Windows shell API."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            wm_dropfiles = 0x0233
+            gwl_wndproc = -4
+            user32 = ctypes.windll.user32
+            shell32 = ctypes.windll.shell32
+            get_proc = user32.GetWindowLongPtrW
+            set_proc = user32.SetWindowLongPtrW
+            long_ptr = ctypes.c_ssize_t
+            get_proc.argtypes = [wintypes.HWND, ctypes.c_int]
+            set_proc.argtypes = [wintypes.HWND, ctypes.c_int, long_ptr]
+            get_proc.restype = long_ptr
+            set_proc.restype = long_ptr
+            wndproc_type = ctypes.WINFUNCTYPE(
+                long_ptr,
+                wintypes.HWND,
+                wintypes.UINT,
+                wintypes.WPARAM,
+                wintypes.LPARAM,
+            )
+            hwnd = root.winfo_id()
+            original_proc = get_proc(hwnd, gwl_wndproc)
+
+            @wndproc_type
+            def drop_proc(window, message, wparam, lparam):
+                if message == wm_dropfiles:
+                    count = shell32.DragQueryFileW(wparam, 0xFFFFFFFF, None, 0)
+                    if count:
+                        length = shell32.DragQueryFileW(wparam, 0, None, 0)
+                        buffer = ctypes.create_unicode_buffer(length + 1)
+                        shell32.DragQueryFileW(wparam, 0, buffer, len(buffer))
+                        dropped = Path(buffer.value)
+                        root.after(0, lambda: input_value.set(str(dropped)))
+                    shell32.DragFinish(wparam)
+                    return 0
+                return user32.CallWindowProcW(original_proc, window, message, wparam, lparam)
+
+            root._drop_proc = drop_proc  # type: ignore[attr-defined]
+            user32.DragAcceptFiles(hwnd, True)
+            set_proc(hwnd, gwl_wndproc, ctypes.cast(drop_proc, ctypes.c_void_p).value)
+        except (AttributeError, OSError):
+            pass
+
+    root.update_idletasks()
+    enable_windows_file_drop()
+
     lyrics_box = ttk.LabelFrame(outer, text="主歌词", padding=8)
     lyrics_box.grid(row=1, column=0, sticky="ew", pady=(0, 8))
     lyrics_controls: list[ttk.Checkbutton] = []
@@ -1613,8 +1670,11 @@ def build_form_options(
         button.grid(row=0, column=column, sticky="w", padx=(0, 10))
         translation_buttons.append(button)
     ttk.Label(attachment_box, text="翻译输出：").grid(row=1, column=0, sticky="w", pady=(5, 0))
-    ttk.Radiobutton(attachment_box, text="逐行 LRC", variable=translation_output, value="lrc").grid(row=1, column=1, sticky="w", pady=(5, 0))
-    ttk.Radiobutton(attachment_box, text="不输出", variable=translation_output, value="none").grid(row=1, column=2, sticky="w", pady=(5, 0))
+    translation_output_buttons: list[ttk.Radiobutton] = []
+    for column, (value, label) in enumerate((("lrc", "逐行 LRC"), ("none", "不输出")), 1):
+        button = ttk.Radiobutton(attachment_box, text=label, variable=translation_output, value=value)
+        button.grid(row=1, column=column, sticky="w", pady=(5, 0))
+        translation_output_buttons.append(button)
     ttk.Label(attachment_box, text="发音输出选项：").grid(row=2, column=0, sticky="w", pady=(5, 0))
     transliteration_buttons: list[ttk.Radiobutton] = []
     for column, (value, label) in enumerate(
@@ -1636,7 +1696,8 @@ def build_form_options(
         variable=transliteration_language,
     )
     transliteration_language_check.grid(row=3, column=2, columnspan=2, sticky="w", pady=(6, 0))
-    ttk.Checkbutton(attachment_box, text="内嵌附属歌词", variable=embed_attachments).grid(row=4, column=0, sticky="w", pady=(4, 0))
+    embed_attachments_check = ttk.Checkbutton(attachment_box, text="内嵌附属歌词", variable=embed_attachments)
+    embed_attachments_check.grid(row=4, column=0, sticky="w", pady=(4, 0))
     ttk.Checkbutton(attachment_box, text="输出翻译文件（_trans.lrc）", variable=write_translation_track).grid(row=4, column=1, columnspan=2, sticky="w", pady=(4, 0))
     ttk.Checkbutton(attachment_box, text="输出音译文件（_pron.lrc）", variable=write_transliteration_track).grid(row=4, column=3, columnspan=2, sticky="w", pady=(4, 0))
 
@@ -1758,11 +1819,13 @@ def build_form_options(
         elif selected_compatibility in {"enhanced", "eslrc"}:
             for variable, value in (
                 (lyrics_marker, True), (line_end, False), (agent, False),
-                (line_id, False), (syllable_end, False), (first_syllable, False),
+                (line_id, False), (syllable_end, False),
                 (trailing, True),
             ):
                 if variable.get() != value:
                     variable.set(value)
+            if selected_compatibility == "eslrc" and first_syllable.get():
+                first_syllable.set(False)
             if background.get() == "keep":
                 background.set("normal")
             if tag_style.get() != ("angle" if selected_compatibility == "enhanced" else "square"):
@@ -1798,6 +1861,14 @@ def build_form_options(
         transliteration_language_check.configure(
             state="normal" if transliteration.get() != "none" else "disabled"
         )
+        if no_attachments:
+            if embed_attachments.get():
+                embed_attachments.set(False)
+            embed_attachments_check.configure(state="disabled")
+            for button in translation_buttons:
+                button.configure(state="disabled")
+        else:
+            embed_attachments_check.configure(state="normal")
         if lqe_mode:
             if trailing.get():
                 trailing.set(False)
@@ -1819,8 +1890,11 @@ def build_form_options(
         else:
             for control in lyrics_controls:
                 index = lyrics_controls.index(control)
+                locked = selected_compatibility != "none" and index >= 2
+                if selected_compatibility == "enhanced" and index == 6:
+                    locked = False
                 control.configure(
-                    state="disabled" if selected_compatibility != "none" and index >= 2 else "normal"
+                    state="disabled" if locked else "normal"
                 )
             for index, button in enumerate(background_buttons):
                 button.configure(
