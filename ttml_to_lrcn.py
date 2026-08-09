@@ -162,6 +162,7 @@ def force_qrc_syllable_format(options: ConversionOptions) -> ConversionOptions:
         return options
     return replace(
         options,
+        include_header=True,
         include_lyrics_marker=True,
         include_line_end=True,
         include_agent=False,
@@ -927,7 +928,7 @@ def convert(root: ET.Element, options: ConversionOptions | None = None) -> str:
                 if options.miaowcham_mode
                 else "Lyrics Next"
             )
-            version = "114.514" if options.miaowcham_mode else "2.0"
+            version = "114.514" if options.miaowcham_mode else "2.3"
             lines.extend([f"[{title}]", f"[version:{version}]", f"[timing:{timing}]"])
         if language and not options.fake_lqe:
             lines.append(f"[lang:{language}]")
@@ -935,7 +936,7 @@ def convert(root: ET.Element, options: ConversionOptions | None = None) -> str:
             for agent in agents:
                 agent_id = agent.get(qname(XML, "id"))
                 if agent_id:
-                    lines.append(f"[agent.{agent_id}:{agent.get('type', 'other')}]")
+                    lines.append(f"[agent:{agent.get('type', 'other')}@{agent_id}]")
 
     translations: list[ET.Element] = []
     transliterations: list[ET.Element] = []
@@ -949,6 +950,7 @@ def convert(root: ET.Element, options: ConversionOptions | None = None) -> str:
         lines.append("")
     emit_lyrics_marker = (
         options.fake_lqe
+        or options.compatibility_format in {"enhanced", "eslrc"}
         or has_embedded_attachments(options)
     )
     if emit_lyrics_marker:
