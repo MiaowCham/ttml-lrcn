@@ -1800,8 +1800,29 @@ def build_form_options(
     browse_button = ttk.Button(output_box, text="浏览…", command=choose_output)
     browse_button.grid(row=0, column=1, padx=(8, 0))
 
+    normal_options_snapshot: dict[str, object] | None = None
+    last_compatibility = compatibility_format.get()
+
     def update_state(*_unused: object) -> None:
+        nonlocal normal_options_snapshot, last_compatibility
         selected_compatibility = compatibility_format.get()
+        previous_compatibility = last_compatibility
+        last_compatibility = selected_compatibility
+        if selected_compatibility != "none" and previous_compatibility == "none":
+            normal_options_snapshot = {
+                "line_end": line_end.get(), "agent": agent.get(), "line_id": line_id.get(),
+                "syllable_end": syllable_end.get(), "first_syllable": first_syllable.get(),
+                "background": background.get(), "translation": translation.get(),
+            }
+        elif selected_compatibility == "none" and previous_compatibility != "none" and normal_options_snapshot:
+            line_end.set(bool(normal_options_snapshot["line_end"]))
+            agent.set(bool(normal_options_snapshot["agent"]))
+            line_id.set(bool(normal_options_snapshot["line_id"]))
+            syllable_end.set(bool(normal_options_snapshot["syllable_end"]))
+            first_syllable.set(bool(normal_options_snapshot["first_syllable"]))
+            background.set(str(normal_options_snapshot["background"]))
+            translation.set(str(normal_options_snapshot["translation"]))
+            normal_options_snapshot = None
         lqe_mode = selected_compatibility == "lqe"
         if none_button is not None:
             none_button.configure(text="�����۞����" if miaowcham_mode.get() else "不使用")
@@ -1842,13 +1863,15 @@ def build_form_options(
                 background.set("normal")
             if tag_style.get() != "parenthesis":
                 tag_style.set("parenthesis")
+        no_attachments = translation_output.get() == "none" and transliteration.get() == "none"
         has_line_id = line_id.get()
-        for button in translation_buttons[:2]:
-            button.configure(state="normal" if has_line_id else "disabled")
         if not has_line_id and translation.get() in {"lnt-full", "lnt-short"}:
             translation.set("lrc")
         lrc_format = translation.get() == "lrc"
-        no_attachments = translation_output.get() == "none" and transliteration.get() == "none"
+        for button in translation_buttons:
+            value = button.cget("value")
+            enabled = not no_attachments and (value == "lrc" or has_line_id)
+            button.configure(state="normal" if enabled else "disabled")
         for button in transliteration_buttons:
             value = button.cget("value")
             enabled = not no_attachments and (not lrc_format or value in {"lrc", "none"})
@@ -1865,8 +1888,6 @@ def build_form_options(
             if embed_attachments.get():
                 embed_attachments.set(False)
             embed_attachments_check.configure(state="disabled")
-            for button in translation_buttons:
-                button.configure(state="disabled")
         else:
             embed_attachments_check.configure(state="normal")
         if lqe_mode:
