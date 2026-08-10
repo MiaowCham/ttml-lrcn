@@ -1802,9 +1802,41 @@ def build_form_options(
 
     normal_options_snapshot: dict[str, object] | None = None
     last_compatibility = compatibility_format.get()
+    previous_translation_output = translation_output.get()
+    previous_transliteration_output = transliteration.get()
+    saved_translation_language = translation_language.get()
+    saved_transliteration_language = transliteration_language.get()
+    saved_embed_attachments = embed_attachments.get()
 
     def update_state(*_unused: object) -> None:
         nonlocal normal_options_snapshot, last_compatibility
+        nonlocal previous_translation_output, previous_transliteration_output
+        nonlocal saved_translation_language, saved_transliteration_language
+        nonlocal saved_embed_attachments
+        current_translation_output = translation_output.get()
+        current_transliteration_output = transliteration.get()
+        previously_had_attachments = (
+            previous_translation_output != "none"
+            or previous_transliteration_output != "none"
+        )
+        currently_has_attachments = (
+            current_translation_output != "none"
+            or current_transliteration_output != "none"
+        )
+        if previous_translation_output != "none" and current_translation_output == "none":
+            saved_translation_language = translation_language.get()
+        elif previous_translation_output == "none" and current_translation_output != "none":
+            translation_language.set(saved_translation_language)
+        if previous_transliteration_output != "none" and current_transliteration_output == "none":
+            saved_transliteration_language = transliteration_language.get()
+        elif previous_transliteration_output == "none" and current_transliteration_output != "none":
+            transliteration_language.set(saved_transliteration_language)
+        previous_translation_output = current_translation_output
+        previous_transliteration_output = current_transliteration_output
+        if previously_had_attachments and not currently_has_attachments:
+            saved_embed_attachments = embed_attachments.get()
+        elif not previously_had_attachments and currently_has_attachments:
+            embed_attachments.set(saved_embed_attachments)
         selected_compatibility = compatibility_format.get()
         previous_compatibility = last_compatibility
         last_compatibility = selected_compatibility
