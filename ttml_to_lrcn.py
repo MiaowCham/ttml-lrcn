@@ -1660,7 +1660,7 @@ def build_form_options(
 
     attachment_box = ttk.LabelFrame(outer, text="翻译与发音", padding=8)
     attachment_box.grid(row=3, column=0, sticky="ew", pady=(0, 8))
-    ttk.Label(attachment_box, text="标签格式（翻译和发音）：").grid(row=0, column=0, sticky="w")
+    ttk.Label(attachment_box, text="标签格式：").grid(row=0, column=0, sticky="w")
     translation_buttons: list[ttk.Radiobutton] = []
     for column, (value, label) in enumerate(
         (("lnt-full", "LNT 完整"), ("lnt-short", "LNT 精简"), ("lrc", "LRC")),
@@ -1675,7 +1675,7 @@ def build_form_options(
         button = ttk.Radiobutton(attachment_box, text=label, variable=translation_output, value=value)
         button.grid(row=1, column=column, sticky="w", pady=(5, 0))
         translation_output_buttons.append(button)
-    ttk.Label(attachment_box, text="发音输出选项：").grid(row=2, column=0, sticky="w", pady=(5, 0))
+    ttk.Label(attachment_box, text="发音输出：").grid(row=2, column=0, sticky="w", pady=(5, 0))
     transliteration_buttons: list[ttk.Radiobutton] = []
     for column, (value, label) in enumerate(
         (("lrcn", "按节拍划分（如有）"), ("both", "节拍（如有）+逐行"), ("lrc", "逐行"), ("none", "不输出")),
@@ -1874,10 +1874,14 @@ def build_form_options(
             button.configure(state="normal" if enabled else "disabled")
         for button in transliteration_buttons:
             value = button.cget("value")
-            enabled = not no_attachments and (not lrc_format or value in {"lrc", "none"})
+            enabled = not lrc_format or value in {"lrc", "none"}
             button.configure(state="normal" if enabled else "disabled")
         if (not has_line_id or lrc_format) and transliteration.get() in {"lrcn", "both"}:
             transliteration.set("lrc")
+        if translation_output.get() == "none" and translation_language.get():
+            translation_language.set(False)
+        if transliteration.get() == "none" and transliteration_language.get():
+            transliteration_language.set(False)
         attachment_language_check.configure(
             state="normal" if translation_output.get() != "none" else "disabled"
         )
