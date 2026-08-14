@@ -2,7 +2,7 @@
 
 将 Apple Music 使用的 TTML 歌词转换为 Lyrics Next v2（`.lrcn`）。脚本只依赖 Python 3.9 或更高版本的标准库。
 
-关于 Lyrics Next，[点我查看](https://docs.miaowcham.com/docs/Lyrics_Next/v2)
+关于 Lyrics Next，[点我查看](https://docs.miaowcham.com/docs/Lyrics_Next/v2.3.html)
 
 Codex 写的，可能会在未来重构。
 
