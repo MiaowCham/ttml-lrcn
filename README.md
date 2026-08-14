@@ -40,7 +40,7 @@ python .\ttml_to_lrcn.py input.ttml --stdout
 python .\ttml_to_lrcn.py input.ttml --non-interactive --fake-lqe
 ```
 
-无论是否在命令行提供输入文件，图形表单顶部都会提供 TTML 路径输入框和“浏览”按钮；确认后才会读取并生成文件。表单可用鼠标点击，也可通过 Tab、方向键和空格键操作。标准输入不是终端（例如 CI 或管道）时会自动使用非交互默认值，且必须提供输入文件。`--text-interactive` 可强制传统终端问答；图形环境或 `tkinter` 不可用时，脚本会自动降级到终端问答。输出使用 UTF-8 编码和 LF 换行。
+无论是否在命令行提供输入文件，图形表单顶部都会提供 TTML 路径输入框和“浏览”按钮；输入框接受由成对单引号或双引号包裹的路径，也可将文件从 Windows 资源管理器拖入窗口。确认后才会读取并生成文件。表单可用鼠标点击，也可通过 Tab、方向键和空格键操作。标准输入不是终端（例如 CI 或管道）时会自动使用非交互默认值，且必须提供输入文件。`--text-interactive` 可强制传统终端问答；图形环境或 `tkinter` 不可用时，脚本会自动降级到终端问答。输出使用 UTF-8 编码和 LF 换行。
 
 在图形表单中，普通点击“开始转换”会导出文件；按住 Shift 点击则只将结果写入系统剪贴板，不创建输出文件。两种操作完成后表单都会保持打开，可继续转换；关闭窗口才会结束 GUI 运行。
 
@@ -60,7 +60,7 @@ python .\ttml_to_lrcn.py input.ttml --non-interactive --fake-lqe
 | `--[no-]first-syllable-tag` | 保留或省略每行首个可推断的节拍标签 |
 | `--background-mode keep\|normal\|omit` | 保留 `[x-bg]`、改为普通歌词行或省略背景人声 |
 | `--no-background` / `--background` | 分别省略/保留背景人声的兼容旧参数 |
-| `--[no-]trailing-end-marker` | 未保留行 end 时，是否在行尾追加结束时间戳 |
+| `--[no-]trailing-end-marker` | 是否在歌词行尾追加结束时间戳 |
 | `--timing-tag-style angle\|square\|parenthesis` | 兼容旧用法；`parenthesis` 等同于选择 QRC 逐拍格式 |
 | `--compatibility-format enhanced\|eslrc\|qrc\|lys\|lqe` | 自动调整主歌词为增强 LRC、ESLRC、QRC、LYS 或 LQE 格式 |
 | `--translation-output lrc\|none` | 是否输出翻译内容 |
@@ -110,6 +110,8 @@ python .\ttml_to_lrcn.py input.ttml --non-interactive --fake-lqe
 每个逐拍发音区段之后还会自动生成一个 `[transliteration: format@LRC]` 逐行发音区段。脚本提取非背景的叶子音节、清理音节边缘已有空白，再用单个空格拼接，例如 `[8.175]ashi moto ni chirabaru kotoba`。
 
 “兼容格式”可直接选择“不使用（LRCN）”、增强 LRC、ESLRC、QRC 或 Lys；强制字段在表单中会灰显。增强 LRC / ESLRC 会自动省略主行扩展字段、将背景人声改为普通行（或省略）并追加对应样式的行尾结束时间；QRC / Lys 会自动使用整数毫秒、行和逐字的持续时间，并把逐字 `(开始,持续时间)` 放在音节之后。未内嵌翻译或音译时，四种兼容格式的主文件后缀依次为 `.lrc`、`.lrc`、`.qrc`、`.lys`。
+
+主歌词区域的“启用行尾标签”默认不勾选。启用后会在每行歌词末尾追加结束时间标签，不会改变 LRCN 的行 `end`、agent、line ID、逐字 `end` 或背景人声设置。选择增强 LRC 或 ESLRC 时该选项会自动启用，选择 QRC、LYS 或 LQE 时则由对应格式接管。
 
 翻译与音译可内嵌到主歌词，也可额外导出独立轨道；仅导出独立轨道且未选择兼容格式时，主歌词使用 `.lnt`，翻译和音译文件分别以 `_trans.lrc`、`_pron.lrc` 结尾。翻译、音译的语言信息使用各自独立的开关。
 

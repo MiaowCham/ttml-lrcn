@@ -41,6 +41,14 @@ def local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
+def input_path_from_text(value: str) -> Path:
+    """Parse a path pasted into the GUI or terminal, accepting paired quotes."""
+    text = value.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        text = text[1:-1]
+    return Path(text)
+
+
 def valid_line_id(value: str) -> bool:
     if value != value.strip() or value.lower() == "x-bg":
         return False
@@ -129,17 +137,6 @@ class ConversionOptions:
             raise OptionConflict("主歌词省略 line 时不允许使用 LRCN Trans 格式")
         if self.translation_format == "lrc" and self.transliteration_format not in {"lrc", "none"}:
             raise OptionConflict("标签格式为 LRC 时，发音只能逐行输出或不输出")
-        if (
-            self.append_end_marker
-            and not self.fake_lqe
-            and self.compatibility_format not in {"qrc", "lys"}
-            and not compatibility_extension_eligible(self)
-        ):
-            raise OptionConflict(
-                "启用兼容扩展前，需省略全部主行扩展字段，并将背景人声设为普通行或不输出"
-            )
-
-
 def qrc_syllable_format(options: ConversionOptions) -> str:
     """Return the QRC/Lys dialect selected for parenthesized beat timing."""
     if options.fake_lqe:
@@ -220,17 +217,6 @@ class BackgroundReference:
     line_id: str
     start: str
     end: str
-
-
-def compatibility_extension_eligible(options: ConversionOptions) -> bool:
-    """Whether the trailing-timestamp compatibility extension is valid."""
-    return (
-        not options.include_line_end
-        and not options.include_agent
-        and not options.include_line_id
-        and not options.include_syllable_end
-        and (not options.include_background or options.background_as_line)
-    )
 
 
 def has_embedded_attachments(options: ConversionOptions) -> bool:
@@ -965,8 +951,8 @@ def convert(root: ET.Element, options: ConversionOptions | None = None) -> str:
         elif uses_qrc_syllable_timing(options):
             marker = "Lyricify Syllable" if uses_lys_syllable_format(options) else "QRC"
             lines.append(f"[lyrics: format@{marker}]")
-        elif options.append_end_marker:
-            marker = "Enhanced LRC" if options.timing_tag_style == "angle" else "ESLRC"
+        elif options.compatibility_format in {"enhanced", "eslrc"}:
+            marker = "Enhanced LRC" if options.compatibility_format == "enhanced" else "ESLRC"
             lines.append(f"[lyrics: format@{marker}]")
         else:
             lines.append("[lyrics: format@Lyrics Next]")
@@ -1244,7 +1230,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--trailing-end-marker",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="省略行 end 时在行尾追加结束时间戳",
+        help="在歌词行尾追加结束时间戳",
     )
     parser.add_argument(
         "--timing-tag-style",
@@ -1413,28 +1399,6 @@ def build_options(args: argparse.Namespace, interactive: bool) -> ConversionOpti
     include_first_syllable_tag = ask_bool(
         "first_syllable_tag", "保留每行首个按节拍划分标签吗？"
     )
-    preliminary_options = ConversionOptions(
-        include_header=include_header,
-        include_lyrics_marker=include_lyrics_marker,
-        include_song_parts=include_song_parts,
-        include_line_end=include_line_end,
-        include_agent=include_agent,
-        include_line_id=include_line_id,
-        include_syllable_end=include_syllable_end,
-        include_first_syllable_tag=include_first_syllable_tag,
-        include_background=background_mode != "omit",
-        background_as_line=background_mode == "normal",
-        include_attachment_language=include_attachment_language,
-        include_translation_language=include_translation_language,
-        include_transliteration_language=include_transliteration_language,
-        translation_format=translation_format,
-        translation_output=args.translation_output,
-        transliteration_format=transliteration_format,
-        embed_attachments=args.embed_attachments,
-        write_translation_track=args.write_translation_track,
-        write_transliteration_track=args.write_transliteration_track,
-        lqe_format=args.lqe_format,
-    )
     if interactive and args.compatibility_format is None:
         compatibility_format = prompt_choice(
             "使用哪种兼容格式？",
@@ -1451,10 +1415,10 @@ def build_options(args: argparse.Namespace, interactive: bool) -> ConversionOpti
     else:
         compatibility_format = args.compatibility_format or "none"
     append_end = compatibility_format in {"enhanced", "eslrc"}
-    if compatibility_format == "none" and compatibility_extension_eligible(preliminary_options):
+    if compatibility_format == "none":
         trailing_value = getattr(args, "trailing_end_marker", None)
         append_end = (
-            prompt_yes_no("启用兼容扩展并在行尾追加结束时间戳吗？", False)
+            prompt_yes_no("启用行尾标签并追加结束时间戳吗？", False)
             if interactive and trailing_value is None
             else option_value(trailing_value, False)
         )
@@ -1593,6 +1557,32 @@ def build_form_options(
             set_proc.argtypes = [wintypes.HWND, ctypes.c_int, long_ptr]
             get_proc.restype = long_ptr
             set_proc.restype = long_ptr
+            get_ancestor = user32.GetAncestor
+            get_ancestor.argtypes = [wintypes.HWND, wintypes.UINT]
+            get_ancestor.restype = wintypes.HWND
+            call_window_proc = user32.CallWindowProcW
+            call_window_proc.argtypes = [
+                ctypes.c_void_p,
+                wintypes.HWND,
+                wintypes.UINT,
+                wintypes.WPARAM,
+                wintypes.LPARAM,
+            ]
+            call_window_proc.restype = long_ptr
+            drag_accept_files = shell32.DragAcceptFiles
+            drag_accept_files.argtypes = [wintypes.HWND, wintypes.BOOL]
+            drag_accept_files.restype = None
+            drag_query_file = shell32.DragQueryFileW
+            drag_query_file.argtypes = [
+                wintypes.HANDLE,
+                wintypes.UINT,
+                wintypes.LPWSTR,
+                wintypes.UINT,
+            ]
+            drag_query_file.restype = wintypes.UINT
+            drag_finish = shell32.DragFinish
+            drag_finish.argtypes = [wintypes.HANDLE]
+            drag_finish.restype = None
             wndproc_type = ctypes.WINFUNCTYPE(
                 long_ptr,
                 wintypes.HWND,
@@ -1600,27 +1590,51 @@ def build_form_options(
                 wintypes.WPARAM,
                 wintypes.LPARAM,
             )
-            hwnd = root.winfo_id()
+            widget_hwnd = root.winfo_id()
+            hwnd = get_ancestor(widget_hwnd, 2) or widget_hwnd
             original_proc = get_proc(hwnd, gwl_wndproc)
+            if not original_proc:
+                return
+            pending_drops: list[str] = []
 
             @wndproc_type
             def drop_proc(window, message, wparam, lparam):
                 if message == wm_dropfiles:
-                    count = shell32.DragQueryFileW(wparam, 0xFFFFFFFF, None, 0)
+                    count = drag_query_file(wparam, 0xFFFFFFFF, None, 0)
                     if count:
-                        length = shell32.DragQueryFileW(wparam, 0, None, 0)
+                        length = drag_query_file(wparam, 0, None, 0)
                         buffer = ctypes.create_unicode_buffer(length + 1)
-                        shell32.DragQueryFileW(wparam, 0, buffer, len(buffer))
-                        dropped = Path(buffer.value)
-                        root.after(0, lambda: input_value.set(str(dropped)))
-                    shell32.DragFinish(wparam)
+                        drag_query_file(wparam, 0, buffer, len(buffer))
+                        pending_drops.append(buffer.value)
+                    drag_finish(wparam)
                     return 0
-                return user32.CallWindowProcW(original_proc, window, message, wparam, lparam)
+                return call_window_proc(original_proc, window, message, wparam, lparam)
+
+            replacement = ctypes.cast(drop_proc, ctypes.c_void_p).value
+            if replacement is None or not set_proc(hwnd, gwl_wndproc, replacement):
+                return
+
+            def disable_windows_file_drop() -> None:
+                try:
+                    drag_accept_files(hwnd, False)
+                    set_proc(hwnd, gwl_wndproc, original_proc)
+                except (OSError, ctypes.ArgumentError, OverflowError):
+                    pass
 
             root._drop_proc = drop_proc  # type: ignore[attr-defined]
-            user32.DragAcceptFiles(hwnd, True)
-            set_proc(hwnd, gwl_wndproc, ctypes.cast(drop_proc, ctypes.c_void_p).value)
-        except (AttributeError, OSError):
+            root._drop_hwnd = hwnd  # type: ignore[attr-defined]
+            root._drop_original_proc = original_proc  # type: ignore[attr-defined]
+            root._disable_file_drop = disable_windows_file_drop  # type: ignore[attr-defined]
+            drag_accept_files(hwnd, True)
+
+            def apply_pending_drop() -> None:
+                if pending_drops:
+                    input_value.set(pending_drops[-1])
+                    pending_drops.clear()
+                root.after(50, apply_pending_drop)
+
+            root.after(50, apply_pending_drop)
+        except (AttributeError, OSError, ctypes.ArgumentError, OverflowError):
             pass
 
     root.update_idletasks()
@@ -1638,6 +1652,7 @@ def build_form_options(
             ("保留 line ID", line_id),
             ("保留逐字 end", syllable_end),
             ("保留首个节拍标签", first_syllable),
+            ("启用行尾标签", trailing),
         )
     ):
         control = ttk.Checkbutton(lyrics_box, text=label, variable=variable)
@@ -1740,7 +1755,7 @@ def build_form_options(
         if output_path.get().strip():
             return Path(output_path.get())
         if input_value.get().strip():
-            source = Path(input_value.get())
+            source = input_path_from_text(input_value.get())
             suffix = ".lqe" if compatibility_format.get() == "lqe" else {
                 "enhanced": ".lrc", "eslrc": ".lrc", "qrc": ".qrc", "lys": ".lys",
             }.get(compatibility_format.get(), ".lrcn")
@@ -1844,7 +1859,8 @@ def build_form_options(
             normal_options_snapshot = {
                 "line_end": line_end.get(), "agent": agent.get(), "line_id": line_id.get(),
                 "syllable_end": syllable_end.get(), "first_syllable": first_syllable.get(),
-                "background": background.get(), "translation": translation.get(),
+                "trailing": trailing.get(), "background": background.get(),
+                "translation": translation.get(),
             }
         elif selected_compatibility == "none" and previous_compatibility != "none" and normal_options_snapshot:
             line_end.set(bool(normal_options_snapshot["line_end"]))
@@ -1852,6 +1868,7 @@ def build_form_options(
             line_id.set(bool(normal_options_snapshot["line_id"]))
             syllable_end.set(bool(normal_options_snapshot["syllable_end"]))
             first_syllable.set(bool(normal_options_snapshot["first_syllable"]))
+            trailing.set(bool(normal_options_snapshot["trailing"]))
             background.set(str(normal_options_snapshot["background"]))
             translation.set(str(normal_options_snapshot["translation"]))
             normal_options_snapshot = None
@@ -1955,7 +1972,9 @@ def build_form_options(
                 )
             for index, button in enumerate(background_buttons):
                 button.configure(
-                    state="disabled" if selected_compatibility != "none" and index == 0 else "normal"
+                    state="disabled"
+                    if selected_compatibility != "none" and index == 0
+                    else "normal"
                 )
             for button in compatibility_buttons:
                 button.configure(state="normal")
@@ -1996,10 +2015,11 @@ def build_form_options(
         if not input_value.get().strip():
             messagebox.showerror("缺少输入文件", "请选择 TTML 文件。", parent=root)
             return
-        selected_input = Path(input_value.get())
+        selected_input = input_path_from_text(input_value.get())
         if not selected_input.is_file():
             messagebox.showerror("输入文件无效", "请选择存在的 TTML 文件。", parent=root)
             return
+        input_value.set(str(selected_input))
         try:
             options = ConversionOptions(
                 include_header=metadata.get(),
@@ -2070,6 +2090,9 @@ def build_form_options(
             messagebox.showerror("转换失败", str(exc), parent=root)
 
     def cancel() -> None:
+        disable_file_drop = getattr(root, "_disable_file_drop", None)
+        if disable_file_drop is not None:
+            disable_file_drop()
         root.destroy()
 
     ttk.Button(buttons, text="取消", command=cancel).grid(row=0, column=0, padx=(0, 8))
@@ -2098,7 +2121,7 @@ def prompt_input_path() -> Path:
         raise ValueError("交互输入已结束")
     if not answer.strip():
         raise ValueError("未提供输入 TTML 文件")
-    return Path(answer.strip())
+    return input_path_from_text(answer)
 
 
 def choose_input_file_form() -> Path:
